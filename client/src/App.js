@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
+import LoginToast from './components/LoginToast';
 import Dashboard from './pages/Dashboard';
 import InventoryList from './pages/InventoryList';
 import AddStock from './pages/AddStock';
@@ -32,6 +33,8 @@ function AppRoutes() {
   const { user } = useAuth();
 
   return (
+    <>
+    {user && <LoginToast />}
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" /> : <Login />} />
       <Route path="/" element={<PrivateRoute><Layout><Dashboard /></Layout></PrivateRoute>} />
@@ -45,6 +48,7 @@ function AppRoutes() {
       <Route path="/audit" element={<AdminRoute><Layout><AuditLog /></Layout></AdminRoute>} />
       <Route path="/users" element={<AdminRoute><Layout><Users /></Layout></AdminRoute>} />
     </Routes>
+    </>
   );
 }
 

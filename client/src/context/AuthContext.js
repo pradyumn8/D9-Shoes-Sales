@@ -32,6 +32,7 @@ export function AuthProvider({ children }) {
 
     localStorage.setItem('d9shoe_token', token);
     localStorage.setItem('d9shoe_user', JSON.stringify(userData));
+    sessionStorage.setItem('d9shoe_just_logged_in', 'true');
     setUser(userData);
     return res.data;
   };

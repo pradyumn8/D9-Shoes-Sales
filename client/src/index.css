@@ -24,6 +24,7 @@ body {
   padding: 0;
   position: fixed;
   height: 100vh;
+  overflow: visible;
   overflow-y: auto;
   z-index: 100;
 }

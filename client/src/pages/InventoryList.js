@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
 import { useAuth } from '../context/AuthContext';
+import Recommendations from '../components/Recommendations';
 
 export default function InventoryList() {
   const { isAdmin } = useAuth();
@@ -99,6 +100,8 @@ export default function InventoryList() {
         <h1>All Inventory Entries</h1>
         <p>Complete inventory list matching your Excel format</p>
       </div>
+
+      <Recommendations compact />
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         <input

@@ -438,4 +438,96 @@ router.post('/export-stock', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/inventory/recommendations - FIFO lot recommendations
+router.get('/recommendations', authMiddleware, async (req, res) => {
+  try {
+    const inventory = await readSheet('Inventory');
+    const unsold = inventory.filter(i => !i.soldTo || String(i.soldTo).trim() === '');
+
+    const lotOrder = (lot) => {
+      const match = String(lot || '').match(/(\d+)/);
+      return match ? parseInt(match[1]) : 999;
+    };
+
+    // Group unsold by model + size
+    const groups = {};
+    unsold.forEach(i => {
+      const key = `${i.d9Model}|${i.size}`;
+      if (!groups[key]) {
+        groups[key] = { d9Model: i.d9Model, shoeType: i.shoeType, size: i.size, lots: {} };
+      }
+      const lot = String(i.lot || '1st').trim();
+      if (!groups[key].lots[lot]) {
+        groups[key].lots[lot] = { lot, qty: 0, entries: [] };
+      }
+      groups[key].lots[lot].qty += Number(i.qty) || 0;
+      groups[key].lots[lot].entries.push({
+        entryId: i.entryId, srNo: i.srNo, qty: i.qty,
+        mrpIncGst: i.mrpIncGst, costPrice: i.costPrice,
+      });
+    });
+
+    const recommendations = [];
+
+    for (const [key, group] of Object.entries(groups)) {
+      const lotNames = Object.keys(group.lots);
+      if (lotNames.length <= 1) continue; // Only one lot, no FIFO issue
+
+      const sortedLots = lotNames.sort((a, b) => lotOrder(a) - lotOrder(b));
+      const oldestLot = sortedLots[0];
+      const newerLots = sortedLots.slice(1);
+
+      // Recommend selling oldest lot first
+      recommendations.push({
+        type: 'fifo',
+        priority: 'high',
+        d9Model: group.d9Model,
+        shoeType: group.shoeType,
+        size: group.size,
+        message: `Sell "${group.d9Model}" (${group.size}) from Lot ${oldestLot} first (${group.lots[oldestLot].qty} units) before moving to ${newerLots.map(l => `Lot ${l}`).join(', ')}`,
+        oldestLot: {
+          lot: oldestLot,
+          qty: group.lots[oldestLot].qty,
+          entries: group.lots[oldestLot].entries,
+        },
+        newerLots: newerLots.map(l => ({
+          lot: l,
+          qty: group.lots[l].qty,
+        })),
+      });
+    }
+
+    // Also flag items sitting in oldest lots with low qty (sell soon)
+    for (const [key, group] of Object.entries(groups)) {
+      const sortedLots = Object.keys(group.lots).sort((a, b) => lotOrder(a) - lotOrder(b));
+      const oldestLot = sortedLots[0];
+      const oldestData = group.lots[oldestLot];
+
+      if (oldestData.qty > 0 && oldestData.qty <= 3 && sortedLots.length === 1) {
+        recommendations.push({
+          type: 'low_stock',
+          priority: 'medium',
+          d9Model: group.d9Model,
+          shoeType: group.shoeType,
+          size: group.size,
+          message: `Only ${oldestData.qty} unit(s) left of "${group.d9Model}" (${group.size}) in Lot ${oldestLot}. Consider restocking or selling soon.`,
+          lot: oldestLot,
+          qty: oldestData.qty,
+        });
+      }
+    }
+
+    // Sort: high priority first
+    recommendations.sort((a, b) => {
+      if (a.priority === 'high' && b.priority !== 'high') return -1;
+      if (a.priority !== 'high' && b.priority === 'high') return 1;
+      return 0;
+    });
+
+    res.json(recommendations);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

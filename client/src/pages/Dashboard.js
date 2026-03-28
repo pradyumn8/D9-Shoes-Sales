@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
+import Recommendations from '../components/Recommendations';
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
@@ -164,6 +165,8 @@ export default function Dashboard() {
           </table>
         </div>
       </div>
+
+      <Recommendations />
     </div>
   );
 }

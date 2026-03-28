@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
+import Recommendations from '../components/Recommendations';
 
 export default function SellStock() {
   const [models, setModels] = useState([]);
@@ -97,6 +98,8 @@ export default function SellStock() {
         <h1>Sell / Export Stock</h1>
         <p>FIFO-based stock export</p>
       </div>
+
+      <Recommendations />
 
       <div className="grid-2">
         <div className="card">
