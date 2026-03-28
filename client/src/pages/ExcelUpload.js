@@ -72,13 +72,24 @@ export default function ExcelUpload() {
     setUploading(false);
   };
 
-  const downloadTemplate = () => {
-    window.open('/api/upload/template', '_blank');
+  const downloadFile = async (url, filename) => {
+    try {
+      const res = await api.get(url, { responseType: 'blob' });
+      const blobUrl = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      setError('Download failed: ' + (err.response?.data?.error || err.message));
+    }
   };
 
-  const downloadExcel = () => {
-    window.open('/api/upload/download', '_blank');
-  };
+  const downloadTemplate = () => downloadFile('/upload/template', 'D9SHOE_Template.xlsx');
+  const downloadExcel = () => downloadFile('/upload/download', 'D9SHOE_Inventory.xlsx');
 
   return (
     <div>

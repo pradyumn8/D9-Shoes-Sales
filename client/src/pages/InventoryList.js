@@ -90,8 +90,20 @@ export default function InventoryList() {
     }
   };
 
-  const downloadExcel = () => {
-    window.open('/api/upload/download', '_blank');
+  const downloadExcel = async () => {
+    try {
+      const res = await api.get('/upload/download', { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'D9SHOE_Inventory.xlsx';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('Download failed');
+    }
   };
 
   return (
