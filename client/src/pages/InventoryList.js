@@ -1,0 +1,261 @@
+import React, { useState, useEffect } from 'react';
+import api from '../utils/api';
+import { useAuth } from '../context/AuthContext';
+
+export default function InventoryList() {
+  const { isAdmin } = useAuth();
+  const [inventory, setInventory] = useState([]);
+  const [filter, setFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [editing, setEditing] = useState(null);
+  const [editForm, setEditForm] = useState({});
+
+  const load = () => {
+    api.get('/inventory').then(res => setInventory(res.data)).catch(console.error);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const filtered = inventory.filter(i => {
+    const matchesSearch =
+      i.shoeType?.toLowerCase().includes(filter.toLowerCase()) ||
+      i.d9Model?.toLowerCase().includes(filter.toLowerCase()) ||
+      i.size?.toLowerCase().includes(filter.toLowerCase()) ||
+      i.buyerName?.toLowerCase().includes(filter.toLowerCase()) ||
+      i.soldTo?.toLowerCase().includes(filter.toLowerCase());
+
+    const matchesStatus =
+      statusFilter === 'all' ||
+      (statusFilter === 'instock' && (!i.soldTo || String(i.soldTo).trim() === '')) ||
+      (statusFilter === 'sold' && i.soldTo && String(i.soldTo).trim() !== '');
+
+    return matchesSearch && matchesStatus;
+  });
+
+  const handleEdit = (entry) => {
+    setEditing(entry.entryId);
+    setEditForm({ ...entry });
+  };
+
+  const handleSave = async () => {
+    try {
+      await api.put(`/inventory/${editing}`, editForm);
+      setEditing(null);
+      load();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Update failed');
+    }
+  };
+
+  const handleDelete = async (entryId) => {
+    if (!window.confirm('Delete this entry?')) return;
+    try {
+      await api.delete(`/inventory/${entryId}`);
+      load();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Delete failed');
+    }
+  };
+
+  const downloadExcel = () => {
+    window.open('/api/upload/download', '_blank');
+  };
+
+  return (
+    <div>
+      <div className="page-header">
+        <h1>All Inventory Entries</h1>
+        <p>Complete inventory list matching your Excel format</p>
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input
+          placeholder="Search by type, model, size, buyer..."
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+          style={{ padding: '8px 14px', border: '1px solid #ddd', borderRadius: 8, width: 300, fontSize: 14 }}
+        />
+        <select
+          value={statusFilter}
+          onChange={e => setStatusFilter(e.target.value)}
+          style={{ padding: '8px 14px', border: '1px solid #ddd', borderRadius: 8, fontSize: 14 }}
+        >
+          <option value="all">All Status</option>
+          <option value="instock">In Stock</option>
+          <option value="sold">Sold</option>
+        </select>
+        <span style={{ color: '#666', fontSize: 13 }}>{filtered.length} entries</span>
+        <div style={{ marginLeft: 'auto' }}>
+          <button className="btn btn-success" onClick={downloadExcel}>Download Excel</button>
+        </div>
+      </div>
+
+      <div className="card" style={{ overflow: 'auto' }}>
+        <div className="table-container">
+          <table style={{ minWidth: 1600 }}>
+            <thead>
+              <tr>
+                <th>Sr</th>
+                <th>Shoe Type</th>
+                <th>D9 Model</th>
+                <th>Size</th>
+                <th>Lot</th>
+                <th>Qty</th>
+                <th>MRP (Inc GST)</th>
+                <th>Discount</th>
+                <th>GST%</th>
+                <th>Cost Price</th>
+                <th>Total Cost</th>
+                <th>Sold To</th>
+                <th>Sale Price</th>
+                <th>Billing Amt</th>
+                <th>Buyer</th>
+                <th>Payment</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(entry => (
+                <tr key={entry.entryId || entry.srNo} style={{
+                  background: entry.soldTo && String(entry.soldTo).trim() ? '#f0fff0' : 'inherit'
+                }}>
+                  <td>{entry.srNo}</td>
+                  <td>{entry.shoeType}</td>
+                  <td><strong>{entry.d9Model}</strong></td>
+                  <td>{entry.size}</td>
+                  <td><span className="badge badge-blue">{entry.lot}</span></td>
+                  <td>{entry.qty}</td>
+                  <td>{entry.mrpIncGst ? `\u20B9${Number(entry.mrpIncGst).toLocaleString()}` : '-'}</td>
+                  <td>{entry.discountReceived || '-'}</td>
+                  <td>{entry.purchaseGstPercent || '-'}</td>
+                  <td>{entry.costPrice ? `\u20B9${Number(entry.costPrice).toLocaleString()}` : '-'}</td>
+                  <td>{entry.totalCostPrice ? `\u20B9${Number(entry.totalCostPrice).toLocaleString()}` : '-'}</td>
+                  <td>{entry.soldTo || '-'}</td>
+                  <td>{entry.salePrice ? `\u20B9${Number(entry.salePrice).toLocaleString()}` : '-'}</td>
+                  <td>{entry.totalBillingAmount ? `\u20B9${Number(entry.totalBillingAmount).toLocaleString()}` : '-'}</td>
+                  <td>{entry.buyerName || '-'}</td>
+                  <td>
+                    {entry.paymentStatus ? (
+                      <span className={`badge ${
+                        ['paid', 'done', 'completed'].includes(String(entry.paymentStatus).toLowerCase())
+                          ? 'badge-green' : 'badge-yellow'
+                      }`}>{entry.paymentStatus}</span>
+                    ) : '-'}
+                  </td>
+                  <td>
+                    <span className={`badge ${entry.status === 'Sold' ? 'badge-yellow' : 'badge-green'}`}>
+                      {entry.status || 'In Stock'}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="btn-group">
+                      <button className="btn btn-sm btn-primary" onClick={() => handleEdit(entry)}>Edit</button>
+                      {isAdmin && (
+                        <button className="btn btn-sm btn-danger" onClick={() => handleDelete(entry.entryId)}>Del</button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr><td colSpan="18" style={{ textAlign: 'center', color: '#999', padding: 40 }}>No entries found</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {editing && (
+        <div className="modal-overlay" onClick={() => setEditing(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 800 }}>
+            <h2>Edit Entry - Sr {editForm.srNo}</h2>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Shoe Type</label>
+                <input value={editForm.shoeType || ''} onChange={e => setEditForm({ ...editForm, shoeType: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label>D9 Model</label>
+                <input value={editForm.d9Model || ''} onChange={e => setEditForm({ ...editForm, d9Model: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label>Size</label>
+                <input value={editForm.size || ''} onChange={e => setEditForm({ ...editForm, size: e.target.value })} />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Lot</label>
+                <input value={editForm.lot || ''} onChange={e => setEditForm({ ...editForm, lot: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label>Qty</label>
+                <input type="number" value={editForm.qty || ''} onChange={e => setEditForm({ ...editForm, qty: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label>MRP (Inc GST)</label>
+                <input value={editForm.mrpIncGst || ''} onChange={e => setEditForm({ ...editForm, mrpIncGst: e.target.value })} />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Discount Received</label>
+                <input value={editForm.discountReceived || ''} onChange={e => setEditForm({ ...editForm, discountReceived: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label>GST%</label>
+                <input value={editForm.purchaseGstPercent || ''} onChange={e => setEditForm({ ...editForm, purchaseGstPercent: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label>Cost Price</label>
+                <input value={editForm.costPrice || ''} onChange={e => setEditForm({ ...editForm, costPrice: e.target.value })} />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Sold To</label>
+                <input value={editForm.soldTo || ''} onChange={e => setEditForm({ ...editForm, soldTo: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label>Sale Price</label>
+                <input value={editForm.salePrice || ''} onChange={e => setEditForm({ ...editForm, salePrice: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label>Buyer Name</label>
+                <input value={editForm.buyerName || ''} onChange={e => setEditForm({ ...editForm, buyerName: e.target.value })} />
+              </div>
+            </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label>Payment Status</label>
+                <select value={editForm.paymentStatus || ''} onChange={e => setEditForm({ ...editForm, paymentStatus: e.target.value })}>
+                  <option value="">Select</option>
+                  <option value="Pending">Pending</option>
+                  <option value="Partial">Partial</option>
+                  <option value="Paid">Paid</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Invoicing Done</label>
+                <select value={editForm.invoicingDone || ''} onChange={e => setEditForm({ ...editForm, invoicingDone: e.target.value })}>
+                  <option value="">Select</option>
+                  <option value="Yes">Yes</option>
+                  <option value="No">No</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Remark</label>
+                <input value={editForm.remark || ''} onChange={e => setEditForm({ ...editForm, remark: e.target.value })} />
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSave}>Save Changes</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
