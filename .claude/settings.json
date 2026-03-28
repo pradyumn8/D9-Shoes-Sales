@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(timeout 5 node server/index.js)"
+      "Bash(timeout 5 node server/index.js)",
+      "WebFetch(domain:docs.google.com)",
+      "WebFetch(domain:doc-0c-28-sheets.googleusercontent.com)",
+      "Bash(node -e \"const s = require\\(''./server/services/excelService''\\); console.log\\(''ExcelService loaded OK''\\); console.log\\(''Exports:'', Object.keys\\(s\\).join\\('', ''\\)\\)\")",
+      "Bash(node -e \":*)",
+      "Bash(curl -s -X POST http://localhost:5000/api/auth/login -H \"Content-Type: application/json\" -d '{\"\"username\"\":\"\"admin\"\",\"\"password\"\":\"\"admin123\"\"}')",
+      "Bash(curl -s http://localhost:3000/api/auth/login -X POST -H \"Content-Type: application/json\" -d '{\"\"\"\"username\"\"\"\":\"\"\"\"admin\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"admin123\"\"\"\"}')",
+      "Bash(curl -s -X POST http://localhost:5000/api/auth/login -H \"Content-Type: application/json\" -d \"{\"\"username\"\":\"\"admin\"\",\"\"password\"\":\"\"admin123\"\"}\")",
+      "Bash(curl -s -X POST http://localhost:5000/api/auth/login -H \"Content-Type: application/json\" -d \"{\"\"username\"\":\"\"user\"\",\"\"password\"\":\"\"user123\"\"}\")"
     ]
   }
 }

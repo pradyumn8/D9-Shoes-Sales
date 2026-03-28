@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
+import { useAuth } from '../context/AuthContext';
 
 export default function Users() {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ username: '', password: '', role: 'user', fullName: '' });
@@ -29,6 +31,17 @@ export default function Users() {
     }
   };
 
+  const handleDelete = async (userId, username) => {
+    if (!window.confirm(`Are you sure you want to delete user "${username}"? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/auth/users/${userId}`);
+      setSuccess(`User "${username}" deleted`);
+      loadUsers();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Delete failed');
+    }
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -37,7 +50,7 @@ export default function Users() {
       </div>
 
       <div style={{ marginBottom: 16 }}>
-        <button className="btn btn-primary" onClick={() => { setForm({ username: '', password: '', role: 'user', fullName: '' }); setShowModal(true); }}>
+        <button className="btn btn-primary" onClick={() => { setForm({ username: '', password: '', role: 'user', fullName: '' }); setError(''); setShowModal(true); }}>
           + Add User
         </button>
       </div>
@@ -53,6 +66,7 @@ export default function Users() {
                 <th>Full Name</th>
                 <th>Role</th>
                 <th>Created</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -66,6 +80,15 @@ export default function Users() {
                     </span>
                   </td>
                   <td>{user.createdAt ? new Date(user.createdAt).toLocaleDateString() : '-'}</td>
+                  <td>
+                    {user.userId === currentUser?.userId ? (
+                      <span style={{ color: '#999', fontSize: 12 }}>Current user</span>
+                    ) : (
+                      <button className="btn btn-sm btn-danger" onClick={() => handleDelete(user.userId, user.username)}>
+                        Delete
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

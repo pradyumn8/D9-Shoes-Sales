@@ -3,7 +3,7 @@ const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const {
-  readSheet, appendRow, appendRows, getNextSrNo,
+  readSheet, appendRow, appendRows, updateRow, getNextSrNo,
   parseUploadedExcel, mapUploadedRow, validateInventoryRow,
   cleanNumeric, cleanPercent, DB_FILE,
 } = require('../services/excelService');
@@ -32,42 +32,44 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
-// POST /api/upload/bulk - Bulk upload inventory from client's Excel format
+// POST /api/upload/bulk - Bulk upload inventory from Excel
+// mode: "append" (default) = add new entries, skip duplicates
+// mode: "update" = update existing entries by Sr No, add new ones
 router.post('/bulk', authMiddleware, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-    const { rows, errors: parseErrors, headers } = await parseUploadedExcel(req.file.path);
+    const mode = req.body.mode || 'append'; // "append" or "update"
+    const { rows, errors: parseErrors, headers, headerRowNum } = await parseUploadedExcel(req.file.path);
 
     if (rows.length === 0) {
       return res.status(400).json({
-        error: 'No data rows found in the uploaded file',
+        error: 'No data rows found in the uploaded file. Make sure the file has column headers like "Shoe Type", "D9 Model", "Size", "Qty".',
         errors: parseErrors,
+        detectedHeaders: headers,
+        headerRowFound: headerRowNum,
       });
     }
 
-    // Validate headers - check for required columns
-    const requiredHeaders = ['Shoe Type', 'D9 Model', 'Size', 'Qty'];
-    const headerLower = headers.filter(Boolean).map(h => h.toLowerCase().trim());
-    const missingHeaders = requiredHeaders.filter(rh =>
-      !headerLower.some(h => h === rh.toLowerCase())
-    );
-
-    if (missingHeaders.length > 0) {
+    // Map the first row to check if headers were detected correctly
+    const testMapped = mapUploadedRow(rows[0]);
+    const hasCriticalFields = testMapped.shoeType || testMapped.d9Model || testMapped.size;
+    if (!hasCriticalFields) {
       return res.status(400).json({
-        error: `Missing required columns: ${missingHeaders.join(', ')}`,
-        foundHeaders: headers.filter(Boolean),
-        hint: 'Required columns: Sr No, Shoe Type, D9 Model, Size, Lot, Qty',
+        error: 'Could not map Excel columns to expected fields. Please ensure your file has columns like "Shoe Type", "D9 Model", "Size", "Qty".',
+        detectedHeaders: headers,
+        headerRowFound: headerRowNum,
+        sampleMapped: testMapped,
+        hint: 'Your Excel may have a title row (like "SALES REGISTER") before the actual headers. The system tried to auto-detect but could not find matching column names.',
       });
     }
 
     let nextSrNo = await getNextSrNo();
-    const results = { success: 0, errors: [], duplicates: 0, total: rows.length };
+    const results = { success: 0, updated: 0, errors: [], duplicates: 0, total: rows.length, mode };
     const entriesToInsert = [];
     const newShoeTypes = new Set();
     const newModels = new Set();
 
-    // Get existing data for duplicate detection
     const existingInventory = await readSheet('Inventory');
     const existingTypes = await readSheet('ShoeTypes');
     const existingModels = await readSheet('Models');
@@ -84,25 +86,69 @@ router.post('/bulk', authMiddleware, upload.single('file'), async (req, res) => 
         continue;
       }
 
-      // Check for duplicate (same model + size + lot + qty + MRP)
-      const isDuplicate = existingInventory.some(e =>
-        e.d9Model === String(mapped.d9Model).trim() &&
-        e.size === String(mapped.size).trim() &&
-        e.lot === String(mapped.lot || '1st').trim() &&
-        Number(e.qty) === Number(mapped.qty) &&
-        Number(e.mrpIncGst) === Number(cleanNumeric(mapped.mrpIncGst))
-      );
+      if (mode === 'update' && mapped.srNo) {
+        // UPDATE mode: find existing entry by Sr No and update it
+        const existingEntry = existingInventory.find(e => Number(e.srNo) === Number(mapped.srNo));
+        if (existingEntry) {
+          const updates = {};
+          if (mapped.shoeType) updates.shoeType = String(mapped.shoeType).trim();
+          if (mapped.d9Model) updates.d9Model = String(mapped.d9Model).trim();
+          if (mapped.size) updates.size = String(mapped.size).trim();
+          if (mapped.lot) updates.lot = String(mapped.lot).trim();
+          if (mapped.qty) updates.qty = Number(mapped.qty);
+          if (mapped.mrpIncGst) updates.mrpIncGst = cleanNumeric(mapped.mrpIncGst);
+          if (mapped.discountReceived) updates.discountReceived = String(mapped.discountReceived);
+          if (mapped.purchaseGstPercent) updates.purchaseGstPercent = cleanPercent(mapped.purchaseGstPercent);
+          if (mapped.costPrice) updates.costPrice = cleanNumeric(mapped.costPrice);
+          if (mapped.purchaseGstAmount) updates.purchaseGstAmount = cleanNumeric(mapped.purchaseGstAmount);
+          if (mapped.totalCostPrice) updates.totalCostPrice = cleanNumeric(mapped.totalCostPrice);
+          if (mapped.amount) updates.amount = cleanNumeric(mapped.amount);
+          if (mapped.billingAmount) updates.billingAmount = cleanNumeric(mapped.billingAmount);
+          if (mapped.saleGstPercent) updates.saleGstPercent = cleanPercent(mapped.saleGstPercent);
+          if (mapped.salePrice) updates.salePrice = cleanNumeric(mapped.salePrice);
+          if (mapped.saleGstAmount) updates.saleGstAmount = cleanNumeric(mapped.saleGstAmount);
+          if (mapped.totalBillingAmount) updates.totalBillingAmount = cleanNumeric(mapped.totalBillingAmount);
+          if (mapped.soldTo) updates.soldTo = String(mapped.soldTo);
+          if (mapped.paid) updates.paid = cleanNumeric(mapped.paid);
+          if (mapped.buyerName) updates.buyerName = String(mapped.buyerName);
+          if (mapped.billingName) updates.billingName = String(mapped.billingName);
+          if (mapped.invoicingDone) updates.invoicingDone = String(mapped.invoicingDone);
+          if (mapped.paymentStatus) updates.paymentStatus = String(mapped.paymentStatus);
+          if (mapped.remark) updates.remark = String(mapped.remark);
 
-      if (isDuplicate) {
-        results.duplicates++;
-        results.errors.push({
-          row: excelRow,
-          field: 'Duplicate',
-          error: `Duplicate entry: ${mapped.d9Model} Size ${mapped.size} Lot ${mapped.lot || '1st'} Qty ${mapped.qty}`,
-        });
-        continue;
+          if (updates.soldTo && String(updates.soldTo).trim() !== '') {
+            updates.status = 'Sold';
+          }
+
+          await updateRow('Inventory', 'srNo', Number(mapped.srNo), updates);
+          results.updated++;
+          continue;
+        }
+        // If Sr No not found in update mode, treat as new entry
       }
 
+      if (mode === 'append') {
+        // Check for duplicate (same model + size + lot + qty + MRP)
+        const isDuplicate = existingInventory.some(e =>
+          e.d9Model === String(mapped.d9Model).trim() &&
+          e.size === String(mapped.size).trim() &&
+          String(e.lot).trim() === String(mapped.lot || '1st').trim() &&
+          Number(e.qty) === Number(mapped.qty) &&
+          cleanNumeric(e.mrpIncGst) === cleanNumeric(mapped.mrpIncGst)
+        );
+
+        if (isDuplicate) {
+          results.duplicates++;
+          results.errors.push({
+            row: excelRow,
+            field: 'Duplicate',
+            error: `Possible duplicate: ${mapped.d9Model} Size ${mapped.size} Lot ${mapped.lot || '1st'} Qty ${mapped.qty}`,
+          });
+          continue;
+        }
+      }
+
+      // New entry
       const entryId = uuidv4();
       const entry = {
         srNo: mapped.srNo || nextSrNo++,
@@ -151,7 +197,7 @@ router.post('/bulk', authMiddleware, upload.single('file'), async (req, res) => 
       results.success++;
     }
 
-    // Batch insert all entries
+    // Batch insert all new entries
     if (entriesToInsert.length > 0) {
       await appendRows('Inventory', entriesToInsert);
     }
@@ -172,15 +218,18 @@ router.post('/bulk', authMiddleware, upload.single('file'), async (req, res) => 
     }
 
     await logAction('BULK_UPLOAD', 'Inventory', '',
-      `Uploaded ${req.file.originalname}: ${results.success} entries added, ${results.duplicates} duplicates, ${results.errors.length} errors`,
+      `Uploaded ${req.file.originalname} (${mode} mode): ${results.success} added, ${results.updated} updated, ${results.duplicates} duplicates, ${results.errors.length} errors`,
       req.user.username
     );
 
     res.json({
-      message: `Upload complete: ${results.success} entries imported`,
+      message: `Upload complete (${mode} mode): ${results.success} entries added` +
+        (results.updated > 0 ? `, ${results.updated} entries updated` : ''),
       ...results,
       newShoeTypes: [...newShoeTypes],
       newModels: [...newModels].map(m => JSON.parse(m).name),
+      detectedHeaders: headers,
+      headerRowFound: headerRowNum,
     });
   } catch (err) {
     res.status(500).json({ error: 'Upload failed: ' + err.message });
@@ -192,20 +241,20 @@ router.post('/preview', authMiddleware, upload.single('file'), async (req, res) 
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-    const { rows, headers } = await parseUploadedExcel(req.file.path);
+    const { rows, headers, headerRowNum } = await parseUploadedExcel(req.file.path);
 
     const previews = rows.slice(0, 20).map((raw, i) => {
       const mapped = mapUploadedRow(raw);
-      const errors = validateInventoryRow(mapped, i + 2);
+      const errors = validateInventoryRow(mapped, mapped._excelRow || (i + 2));
       return { ...mapped, _errors: errors };
     });
 
     res.json({
       totalRows: rows.length,
-      headers: headers.filter(Boolean),
+      headers,
+      headerRowFound: headerRowNum,
       preview: previews,
       fileName: req.file.originalname,
-      filePath: req.file.path,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -236,11 +285,7 @@ router.get('/template', authMiddleware, async (req, res) => {
   const headerRow = sheet.getRow(1);
   headerRow.font = { bold: true, color: { argb: 'FFFF0000' } };
   headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFCC' } };
-
-  // Set column widths
-  templateCols.forEach((_, i) => {
-    sheet.getColumn(i + 1).width = 18;
-  });
+  templateCols.forEach((_, i) => { sheet.getColumn(i + 1).width = 18; });
 
   // Add sample row
   sheet.addRow([1, 'Rubber Studs Shoes', 'Performer 2', 'UK 4', '1st', 1, 2207, '50%', '5%', 1050.95, 52, 1102.95, 1102.95, '', '', '', '', '', '', '', '', '', '', '', '']);

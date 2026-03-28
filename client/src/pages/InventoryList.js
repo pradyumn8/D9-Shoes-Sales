@@ -9,9 +9,11 @@ export default function InventoryList() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState({});
+  const [selected, setSelected] = useState(new Set());
 
   const load = () => {
     api.get('/inventory').then(res => setInventory(res.data)).catch(console.error);
+    setSelected(new Set());
   };
 
   useEffect(() => { load(); }, []);
@@ -31,6 +33,36 @@ export default function InventoryList() {
 
     return matchesSearch && matchesStatus;
   });
+
+  // Selection handlers
+  const toggleSelect = (entryId) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(entryId)) next.delete(entryId);
+      else next.add(entryId);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selected.size === filtered.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(filtered.map(e => e.entryId)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selected.size === 0) return;
+    if (!window.confirm(`Are you sure you want to delete ${selected.size} selected entries? This cannot be undone.`)) return;
+    try {
+      const res = await api.post('/inventory/bulk-delete', { entryIds: [...selected] });
+      alert(res.data.message);
+      load();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Bulk delete failed');
+    }
+  };
 
   const handleEdit = (entry) => {
     setEditing(entry.entryId);
@@ -85,6 +117,13 @@ export default function InventoryList() {
           <option value="sold">Sold</option>
         </select>
         <span style={{ color: '#666', fontSize: 13 }}>{filtered.length} entries</span>
+
+        {isAdmin && selected.size > 0 && (
+          <button className="btn btn-danger" onClick={handleBulkDelete}>
+            Delete Selected ({selected.size})
+          </button>
+        )}
+
         <div style={{ marginLeft: 'auto' }}>
           <button className="btn btn-success" onClick={downloadExcel}>Download Excel</button>
         </div>
@@ -95,6 +134,16 @@ export default function InventoryList() {
           <table style={{ minWidth: 1600 }}>
             <thead>
               <tr>
+                {isAdmin && (
+                  <th style={{ width: 40 }}>
+                    <input
+                      type="checkbox"
+                      checked={filtered.length > 0 && selected.size === filtered.length}
+                      onChange={toggleSelectAll}
+                      title="Select all"
+                    />
+                  </th>
+                )}
                 <th>Sr</th>
                 <th>Shoe Type</th>
                 <th>D9 Model</th>
@@ -118,8 +167,18 @@ export default function InventoryList() {
             <tbody>
               {filtered.map(entry => (
                 <tr key={entry.entryId || entry.srNo} style={{
-                  background: entry.soldTo && String(entry.soldTo).trim() ? '#f0fff0' : 'inherit'
+                  background: selected.has(entry.entryId) ? '#e8f0fe' :
+                    entry.soldTo && String(entry.soldTo).trim() ? '#f0fff0' : 'inherit'
                 }}>
+                  {isAdmin && (
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(entry.entryId)}
+                        onChange={() => toggleSelect(entry.entryId)}
+                      />
+                    </td>
+                  )}
                   <td>{entry.srNo}</td>
                   <td>{entry.shoeType}</td>
                   <td><strong>{entry.d9Model}</strong></td>
@@ -159,7 +218,7 @@ export default function InventoryList() {
                 </tr>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan="18" style={{ textAlign: 'center', color: '#999', padding: 40 }}>No entries found</td></tr>
+                <tr><td colSpan={isAdmin ? 20 : 19} style={{ textAlign: 'center', color: '#999', padding: 40 }}>No entries found</td></tr>
               )}
             </tbody>
           </table>

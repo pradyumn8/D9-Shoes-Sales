@@ -8,19 +8,31 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem('d9shoe_token');
-    const savedUser = localStorage.getItem('d9shoe_user');
-    if (token && savedUser) {
-      setUser(JSON.parse(savedUser));
+    // Just trust localStorage on startup - no API call needed
+    try {
+      const token = localStorage.getItem('d9shoe_token');
+      const savedUser = localStorage.getItem('d9shoe_user');
+      if (token && savedUser) {
+        setUser(JSON.parse(savedUser));
+      }
+    } catch {
+      localStorage.removeItem('d9shoe_token');
+      localStorage.removeItem('d9shoe_user');
     }
     setLoading(false);
   }, []);
 
   const login = async (username, password) => {
+    // Clear any old data first
+    localStorage.removeItem('d9shoe_token');
+    localStorage.removeItem('d9shoe_user');
+
     const res = await api.post('/auth/login', { username, password });
-    localStorage.setItem('d9shoe_token', res.data.token);
-    localStorage.setItem('d9shoe_user', JSON.stringify(res.data.user));
-    setUser(res.data.user);
+    const { token, user: userData } = res.data;
+
+    localStorage.setItem('d9shoe_token', token);
+    localStorage.setItem('d9shoe_user', JSON.stringify(userData));
+    setUser(userData);
     return res.data;
   };
 

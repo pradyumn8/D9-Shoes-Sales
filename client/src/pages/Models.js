@@ -9,10 +9,12 @@ export default function Models() {
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ modelName: '', shoeType: '' });
   const [error, setError] = useState('');
+  const [selected, setSelected] = useState(new Set());
 
   const load = () => {
     api.get('/models').then(res => setModels(res.data)).catch(console.error);
     api.get('/shoe-types').then(res => setShoeTypes(res.data)).catch(console.error);
+    setSelected(new Set());
   };
 
   useEffect(() => { load(); }, []);
@@ -40,6 +42,35 @@ export default function Models() {
     }
   };
 
+  const toggleSelect = (modelId) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(modelId)) next.delete(modelId);
+      else next.add(modelId);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selected.size === models.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(models.map(m => m.modelId)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selected.size === 0) return;
+    if (!window.confirm(`Delete ${selected.size} selected models?`)) return;
+    try {
+      const res = await api.post('/models/bulk-delete', { modelIds: [...selected] });
+      alert(res.data.message);
+      load();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Bulk delete failed');
+    }
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -47,10 +78,15 @@ export default function Models() {
         <p>Manage shoe models (e.g. Performer 2, Blaster 2, Commander 1)</p>
       </div>
 
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
         <button className="btn btn-primary" onClick={() => { setForm({ modelName: '', shoeType: shoeTypes[0]?.typeName || '' }); setShowModal(true); }}>
           + Add Model
         </button>
+        {isAdmin && selected.size > 0 && (
+          <button className="btn btn-danger" onClick={handleBulkDelete}>
+            Delete Selected ({selected.size})
+          </button>
+        )}
       </div>
 
       <div className="card">
@@ -58,6 +94,13 @@ export default function Models() {
           <table>
             <thead>
               <tr>
+                {isAdmin && (
+                  <th style={{ width: 40 }}>
+                    <input type="checkbox"
+                      checked={models.length > 0 && selected.size === models.length}
+                      onChange={toggleSelectAll} title="Select all" />
+                  </th>
+                )}
                 <th>Model Name</th>
                 <th>Shoe Type</th>
                 <th>Created</th>
@@ -66,7 +109,12 @@ export default function Models() {
             </thead>
             <tbody>
               {models.map(m => (
-                <tr key={m.modelId}>
+                <tr key={m.modelId} style={{ background: selected.has(m.modelId) ? '#e8f0fe' : 'inherit' }}>
+                  {isAdmin && (
+                    <td>
+                      <input type="checkbox" checked={selected.has(m.modelId)} onChange={() => toggleSelect(m.modelId)} />
+                    </td>
+                  )}
                   <td><strong>{m.modelName}</strong></td>
                   <td><span className="badge badge-blue">{m.shoeType}</span></td>
                   <td>{m.createdAt ? new Date(m.createdAt).toLocaleDateString() : '-'}</td>
@@ -78,7 +126,7 @@ export default function Models() {
                 </tr>
               ))}
               {models.length === 0 && (
-                <tr><td colSpan="4" style={{ textAlign: 'center', color: '#999', padding: 40 }}>No models. Add one or upload an Excel file to auto-create.</td></tr>
+                <tr><td colSpan={isAdmin ? 5 : 3} style={{ textAlign: 'center', color: '#999', padding: 40 }}>No models. Add one or upload an Excel file to auto-create.</td></tr>
               )}
             </tbody>
           </table>

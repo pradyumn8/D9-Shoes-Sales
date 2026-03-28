@@ -312,6 +312,29 @@ router.delete('/:entryId', authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
+// POST /api/inventory/bulk-delete (admin only) - Delete multiple entries
+router.post('/bulk-delete', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { entryIds } = req.body;
+    if (!entryIds || !Array.isArray(entryIds) || entryIds.length === 0) {
+      return res.status(400).json({ error: 'Provide an array of entryIds to delete' });
+    }
+
+    let deleted = 0;
+    let failed = 0;
+    for (const entryId of entryIds) {
+      const found = await deleteRow('Inventory', 'entryId', entryId);
+      if (found) deleted++;
+      else failed++;
+    }
+
+    await logAction('BULK_DELETE', 'Inventory', '', `Bulk deleted ${deleted} entries (${failed} not found)`, req.user.username);
+    res.json({ message: `${deleted} entries deleted`, deleted, failed });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/inventory/fifo/:model/:size - FIFO order for a model+size
 router.get('/fifo/:model/:size', authMiddleware, async (req, res) => {
   try {

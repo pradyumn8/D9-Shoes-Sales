@@ -2,7 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
-const { readSheet, appendRow } = require('../services/excelService');
+const { readSheet, appendRow, deleteRow } = require('../services/excelService');
 const { authMiddleware, adminOnly, JWT_SECRET } = require('../middleware/auth');
 
 const router = express.Router();
@@ -80,6 +80,23 @@ router.get('/users', authMiddleware, adminOnly, async (req, res) => {
     const users = await readSheet('Users');
     const safeUsers = users.map(({ password, ...rest }) => rest);
     res.json(safeUsers);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/auth/users/:userId (admin only)
+router.delete('/users/:userId', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    // Prevent admin from deleting themselves
+    if (req.params.userId === req.user.userId) {
+      return res.status(400).json({ error: 'You cannot delete your own account' });
+    }
+
+    const found = await deleteRow('Users', 'userId', req.params.userId);
+    if (!found) return res.status(404).json({ error: 'User not found' });
+
+    res.json({ message: 'User deleted' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

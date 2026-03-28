@@ -64,4 +64,43 @@ router.delete('/:id', authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
+// POST /api/models/bulk-delete (admin only)
+router.post('/bulk-delete', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { modelIds } = req.body;
+    if (!modelIds || !Array.isArray(modelIds) || modelIds.length === 0) {
+      return res.status(400).json({ error: 'Provide an array of modelIds to delete' });
+    }
+
+    const models = await readSheet('Models');
+    const inventory = await readSheet('Inventory');
+
+    let deleted = 0;
+    let skipped = 0;
+    const skippedNames = [];
+
+    for (const modelId of modelIds) {
+      const model = models.find(m => m.modelId === modelId);
+      if (!model) continue;
+
+      if (inventory.some(i => i.d9Model === model.modelName)) {
+        skipped++;
+        skippedNames.push(model.modelName);
+        continue;
+      }
+
+      await deleteRow('Models', 'modelId', modelId);
+      deleted++;
+    }
+
+    await logAction('BULK_DELETE', 'Models', '', `Bulk deleted ${deleted} models, ${skipped} skipped (in use)`, req.user.username);
+    res.json({
+      message: `${deleted} models deleted` + (skipped > 0 ? `, ${skipped} skipped (used in inventory)` : ''),
+      deleted, skipped, skippedNames,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

@@ -256,23 +256,92 @@ async function getNextSrNo() {
   return maxSr + 1;
 }
 
+// Known column headers to identify the real header row
+const KNOWN_HEADERS = [
+  'sr no', 'shoe type', 'd9 model', 'size', 'lot', 'qty', 'quantity',
+  'mrp', 'mrp [including gst]', 'discount received', 'discount',
+  'gst%', 'gst', 'cost price', 'gst amount', 'total cost price',
+  'amount', 'billing amount', 'sale price', 'total billing amount',
+  'sold to', 'paid', 'buyer name', 'billing name', 'invoicing done',
+  'payment status', 'remark', 'remarks',
+];
+
+// Find the actual header row (skips title rows, merged cells like "SALES REGISTER")
+function findHeaderRow(sheet) {
+  let headerRowNumber = -1;
+  let bestScore = 0;
+
+  sheet.eachRow((row, rowNumber) => {
+    const cells = [];
+    row.eachCell((cell) => {
+      let val = cell.value;
+      if (val && typeof val === 'object' && val.richText) {
+        val = val.richText.map(r => r.text).join('');
+      }
+      if (val) cells.push(String(val).trim().toLowerCase());
+    });
+
+    // Score: how many cells match known header names
+    let score = 0;
+    for (const cellVal of cells) {
+      if (KNOWN_HEADERS.some(h => cellVal.includes(h) || h.includes(cellVal))) {
+        score++;
+      }
+    }
+
+    // Need at least 3 matching headers and must have distinct values (not all same like "SALES REGISTER")
+    const uniqueCells = new Set(cells);
+    if (score > bestScore && score >= 3 && uniqueCells.size >= 3) {
+      bestScore = score;
+      headerRowNumber = rowNumber;
+    }
+  });
+
+  return headerRowNumber;
+}
+
 // Parse uploaded Excel file and return rows with validation
 async function parseUploadedExcel(filePath) {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(filePath);
-  const sheet = workbook.worksheets[0];
-  if (!sheet) return { rows: [], errors: [{ row: 0, error: 'No worksheet found in file' }] };
 
+  // Try all worksheets to find data
+  let sheet = null;
+  let headerRowNum = -1;
+
+  for (const ws of workbook.worksheets) {
+    const found = findHeaderRow(ws);
+    if (found > 0) {
+      sheet = ws;
+      headerRowNum = found;
+      break;
+    }
+  }
+
+  if (!sheet || headerRowNum === -1) {
+    // Fallback: try first worksheet, row 1
+    sheet = workbook.worksheets[0];
+    if (!sheet) return { rows: [], errors: [{ row: 0, error: 'No worksheet found in file' }], headers: [] };
+    headerRowNum = 1;
+  }
+
+  // Extract headers from the detected header row
   const headers = [];
-  sheet.getRow(1).eachCell((cell, colNumber) => {
-    headers[colNumber] = String(cell.value || '').trim();
+  sheet.getRow(headerRowNum).eachCell((cell, colNumber) => {
+    let val = cell.value;
+    if (val && typeof val === 'object' && val.richText) {
+      val = val.richText.map(r => r.text).join('');
+    }
+    headers[colNumber] = String(val || '').trim();
   });
 
   const rows = [];
   const errors = [];
 
   sheet.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) return;
+    // Skip all rows up to and including header row
+    if (rowNumber <= headerRowNum) return;
+
     const obj = {};
     let hasData = false;
 
@@ -284,11 +353,17 @@ async function parseUploadedExcel(filePath) {
         if (val && typeof val === 'object' && val.richText) {
           val = val.richText.map(r => r.text).join('');
         }
+        // Handle formula results
+        if (val && typeof val === 'object' && val.result !== undefined) {
+          val = val.result;
+        }
         // Handle currency strings like "₹ 2,207.00"
         if (typeof val === 'string') {
-          val = val.replace(/[₹,\s]/g, '').trim();
-          if (val && !isNaN(Number(val))) {
-            val = Number(val);
+          const cleaned = val.replace(/[₹,]/g, '').trim();
+          if (cleaned && !isNaN(Number(cleaned)) && cleaned !== '') {
+            val = Number(cleaned);
+          } else {
+            val = val.trim();
           }
         }
         obj[header] = val;
@@ -302,49 +377,81 @@ async function parseUploadedExcel(filePath) {
     }
   });
 
-  return { rows, errors, headers };
+  return { rows, errors, headers: headers.filter(Boolean), headerRowNum };
 }
 
-// Map uploaded Excel headers to our internal keys
-function mapUploadedRow(row) {
-  const headerMap = {
-    'Sr No': 'srNo',
-    'Shoe Type': 'shoeType',
-    'D9 Model': 'd9Model',
-    'Size': 'size',
-    'Lot': 'lot',
-    'Qty': 'qty',
-    'MRP [Including GST]': 'mrpIncGst',
-    'Discount Received': 'discountReceived',
-    'GST%': 'purchaseGstPercent',
-    'Cost Price': 'costPrice',
-    'GST Amount': 'purchaseGstAmount',
-    'Total Cost Price': 'totalCostPrice',
-    'Amount': 'amount',
-    'Billing Amount': 'billingAmount',
-    'GST% ': 'saleGstPercent',
-    'Sale Price': 'salePrice',
-    'GST Amount ': 'saleGstAmount',
-    'Total Billing Amount': 'totalBillingAmount',
-    'Sold To': 'soldTo',
-    'Paid': 'paid',
-    'Buyer Name': 'buyerName',
-    'Billing Name': 'billingName',
-    'Invoicing Done': 'invoicingDone',
-    'Payment Status': 'paymentStatus',
-    'Remark': 'remark',
-  };
+// Flexible header matching rules: each internal key maps to multiple possible header names
+const HEADER_ALIASES = {
+  srNo: ['sr no', 'sr.no', 'sr. no', 'sno', 's.no', 'serial', 'serial no', '#'],
+  shoeType: ['shoe type', 'shoetype', 'type', 'category', 'shoe category'],
+  d9Model: ['d9 model', 'd9model', 'model', 'model name', 'product', 'product name'],
+  size: ['size', 'shoe size'],
+  lot: ['lot', 'lot no', 'batch', 'lot number'],
+  qty: ['qty', 'quantity', 'units', 'pcs', 'nos'],
+  mrpIncGst: ['mrp [including gst]', 'mrp (including gst)', 'mrp including gst', 'mrp [inc gst]', 'mrp', 'mrp inc gst', 'mrp (inc gst)'],
+  discountReceived: ['discount received', 'discount', 'disc', 'disc%', 'discount%', 'disc received'],
+  purchaseGstPercent: ['gst%', 'gst %', 'gst percent', 'purchase gst%', 'purchase gst'],
+  costPrice: ['cost price', 'cost', 'purchase price', 'buy price', 'cp'],
+  purchaseGstAmount: ['gst amount', 'gst amt', 'purchase gst amount', 'purchase gst amt'],
+  totalCostPrice: ['total cost price', 'total cost', 'total cp', 'net cost'],
+  amount: ['amount', 'total amount', 'net amount'],
+  billingAmount: ['billing amount', 'bill amount', 'bill amt'],
+  saleGstPercent: ['sale gst%', 'selling gst%', 'sale gst', 'sell gst%'],
+  salePrice: ['sale price', 'selling price', 'sp', 'sell price'],
+  saleGstAmount: ['sale gst amount', 'sale gst amt', 'selling gst amount'],
+  totalBillingAmount: ['total billing amount', 'total billing', 'total bill amount', 'total sale', 'total selling amount'],
+  soldTo: ['sold to', 'soldto', 'customer', 'sold'],
+  paid: ['paid', 'paid amount', 'payment received', 'received'],
+  buyerName: ['buyer name', 'buyername', 'buyer'],
+  billingName: ['billing name', 'billingname', 'bill name', 'bill to'],
+  invoicingDone: ['invoicing done', 'invoice done', 'invoiced', 'invoice'],
+  paymentStatus: ['payment status', 'pay status', 'status', 'payment'],
+  remark: ['remark', 'remarks', 'note', 'notes', 'comment', 'comments'],
+};
 
+// Map uploaded Excel headers to our internal keys using fuzzy matching
+function mapUploadedRow(row) {
   const mapped = {};
-  for (const [excelHeader, internalKey] of Object.entries(headerMap)) {
-    // Try exact match first, then case-insensitive
-    if (row[excelHeader] !== undefined) {
-      mapped[internalKey] = row[excelHeader];
-    } else {
-      const found = Object.keys(row).find(k => k.trim().toLowerCase() === excelHeader.trim().toLowerCase());
-      if (found) mapped[internalKey] = row[found];
+  const rowKeys = Object.keys(row).filter(k => !k.startsWith('_'));
+
+  for (const [internalKey, aliases] of Object.entries(HEADER_ALIASES)) {
+    // Try each alias against each row key
+    for (const alias of aliases) {
+      // Exact match
+      const exactMatch = rowKeys.find(k => k === alias);
+      if (exactMatch) {
+        mapped[internalKey] = row[exactMatch];
+        break;
+      }
+      // Case-insensitive match
+      const caseMatch = rowKeys.find(k => k.toLowerCase().trim() === alias.toLowerCase());
+      if (caseMatch) {
+        mapped[internalKey] = row[caseMatch];
+        break;
+      }
+      // Contains match (for headers like "GST%" appearing as first or second)
+      const containsMatch = rowKeys.find(k => k.toLowerCase().trim().includes(alias.toLowerCase()));
+      if (containsMatch && !mapped[internalKey]) {
+        mapped[internalKey] = row[containsMatch];
+      }
     }
   }
+
+  // Handle duplicate GST% columns (purchase vs sale) by position
+  // The first "GST%" is purchase, if there's a second one after "Billing Amount" it's sale
+  const gstKeys = rowKeys.filter(k => k.toLowerCase().trim() === 'gst%' || k.toLowerCase().trim() === 'gst% ');
+  if (gstKeys.length >= 2) {
+    mapped.purchaseGstPercent = row[gstKeys[0]];
+    mapped.saleGstPercent = row[gstKeys[1]];
+  }
+
+  // Same for duplicate "GST Amount" columns
+  const gstAmtKeys = rowKeys.filter(k => k.toLowerCase().trim().startsWith('gst amount'));
+  if (gstAmtKeys.length >= 2) {
+    mapped.purchaseGstAmount = row[gstAmtKeys[0]];
+    mapped.saleGstAmount = row[gstAmtKeys[1]];
+  }
+
   mapped._excelRow = row._excelRow;
   return mapped;
 }
