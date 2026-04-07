@@ -24,12 +24,12 @@ export default function StockSummary() {
         <p>Current unsold inventory grouped by model and size</p>
       </div>
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
+      <div className="toolbar">
         <input
           placeholder="Search by type, model, size..."
           value={filter}
           onChange={e => setFilter(e.target.value)}
-          style={{ padding: '8px 14px', border: '1px solid #ddd', borderRadius: 8, width: 300, fontSize: 14 }}
+          className="search-input"
         />
         <span style={{ color: '#666', fontSize: 13 }}>Total available: <strong>{totalQty}</strong> units</span>
       </div>

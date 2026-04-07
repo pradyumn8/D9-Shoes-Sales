@@ -78,7 +78,7 @@ export default function Models() {
         <p>Manage shoe models (e.g. Performer 2, Blaster 2, Commander 1)</p>
       </div>
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
+      <div className="toolbar">
         <button className="btn btn-primary" onClick={() => { setForm({ modelName: '', shoeType: shoeTypes[0]?.typeName || '' }); setShowModal(true); }}>
           + Add Model
         </button>

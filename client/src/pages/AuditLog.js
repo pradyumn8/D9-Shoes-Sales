@@ -23,12 +23,12 @@ export default function AuditLog() {
         <p>Complete history of all system actions</p>
       </div>
 
-      <div style={{ marginBottom: 16 }}>
+      <div className="toolbar">
         <input
           placeholder="Search logs..."
           value={filter}
           onChange={e => setFilter(e.target.value)}
-          style={{ padding: '8px 14px', border: '1px solid #ddd', borderRadius: 8, width: 300, fontSize: 14 }}
+          className="search-input"
         />
       </div>
 

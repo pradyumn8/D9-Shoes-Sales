@@ -115,12 +115,12 @@ export default function InventoryList() {
 
       <Recommendations compact />
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+      <div className="toolbar">
         <input
           placeholder="Search by type, model, size, buyer..."
           value={filter}
           onChange={e => setFilter(e.target.value)}
-          style={{ padding: '8px 14px', border: '1px solid #ddd', borderRadius: 8, width: 300, fontSize: 14 }}
+          className="search-input"
         />
         <select
           value={statusFilter}
