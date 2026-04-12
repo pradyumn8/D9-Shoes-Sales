@@ -11,7 +11,8 @@
       "Bash(curl -s -X POST http://localhost:5000/api/auth/login -H \"Content-Type: application/json\" -d \"{\"\"username\"\":\"\"admin\"\",\"\"password\"\":\"\"admin123\"\"}\")",
       "Bash(curl -s -X POST http://localhost:5000/api/auth/login -H \"Content-Type: application/json\" -d \"{\"\"username\"\":\"\"user\"\",\"\"password\"\":\"\"user123\"\"}\")",
       "Bash(node -e \"require\\(''./server/routes/inventory''\\); console.log\\(''OK''\\);\")",
-      "Bash(ls -la \"c:/Users/prady/OneDrive/Desktop/New folder \\(2\\)/D9SHOE/server/data/inventory.xlsx\")"
+      "Bash(ls -la \"c:/Users/prady/OneDrive/Desktop/New folder \\(2\\)/D9SHOE/server/data/inventory.xlsx\")",
+      "Bash(npm run:*)"
     ]
   }
 }
