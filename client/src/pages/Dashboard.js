@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
 import Recommendations from '../components/Recommendations';
+import {
+  PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  Tooltip, Legend, ResponsiveContainer,
+} from 'recharts';
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
@@ -47,6 +51,82 @@ export default function Dashboard() {
         <div className="stat-card red">
           <div className="stat-label">Payment Pending</div>
           <div className="stat-value">{stats.paymentPendingCount}</div>
+        </div>
+      </div>
+
+      {/* Charts */}
+      <div className="grid-2" style={{ marginBottom: 16 }}>
+        <div className="card">
+          <div className="card-header">
+            <h3>In Stock vs Sold</h3>
+          </div>
+          <div style={{ width: '100%', height: 260 }}>
+            <ResponsiveContainer>
+              <PieChart>
+                <Pie
+                  data={[
+                    { name: 'In Stock', value: stats.unsoldQty || 0 },
+                    { name: 'Sold', value: stats.soldQty || 0 },
+                  ]}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={60}
+                  outerRadius={90}
+                  paddingAngle={2}
+                  label={({ name, value }) => `${name}: ${value}`}
+                >
+                  <Cell fill="#2ecc71" />
+                  <Cell fill="#f39c12" />
+                </Pie>
+                <Tooltip />
+                <Legend verticalAlign="bottom" />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3>Stock by Shoe Type</h3>
+          </div>
+          <div style={{ width: '100%', height: 260 }}>
+            <ResponsiveContainer>
+              <BarChart data={stats.shoeTypes || []} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="unsold" name="In Stock" fill="#2ecc71" />
+                <Bar dataKey="sold" name="Sold" fill="#f39c12" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header">
+          <h3>Top Models by Available Stock</h3>
+        </div>
+        <div style={{ width: '100%', height: Math.max(240, Math.min(8, stats.models?.length || 0) * 36 + 60) }}>
+          <ResponsiveContainer>
+            <BarChart
+              data={[...(stats.models || [])]
+                .sort((a, b) => (b.unsold || 0) - (a.unsold || 0))
+                .slice(0, 8)}
+              layout="vertical"
+              margin={{ top: 8, right: 16, left: 40, bottom: 8 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+              <XAxis type="number" tick={{ fontSize: 11 }} />
+              <YAxis dataKey="name" type="category" width={110} tick={{ fontSize: 11 }} />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey="unsold" name="Available" fill="#3498db" />
+              <Bar dataKey="total" name="Total ever" fill="#bdc3c7" />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       </div>
 
