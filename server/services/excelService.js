@@ -29,6 +29,7 @@ const SHEET_DEFINITIONS = {
   Inventory: [
     { header: 'Sr No', key: 'srNo', width: 8 },
     { header: 'Shoe Type', key: 'shoeType', width: 22 },
+    { header: 'D9 Code', key: 'd9Code', width: 12 },
     { header: 'D9 Model', key: 'd9Model', width: 20 },
     { header: 'Size', key: 'size', width: 10 },
     { header: 'Lot', key: 'lot', width: 8 },
@@ -68,9 +69,34 @@ const SHEET_DEFINITIONS = {
   // Track D9 Models
   Models: [
     { header: 'ModelID', key: 'modelId', width: 20 },
+    { header: 'ModelCode', key: 'modelCode', width: 14 },
     { header: 'ModelName', key: 'modelName', width: 25 },
     { header: 'ShoeType', key: 'shoeType', width: 25 },
     { header: 'CreatedAt', key: 'createdAt', width: 22 },
+  ],
+  // Pending stock-add requests from non-admin users (admin approves → moves to Inventory).
+  StockRequests: [
+    { header: 'RequestID', key: 'requestId', width: 20 },
+    { header: 'Shoe Type', key: 'shoeType', width: 22 },
+    { header: 'D9 Code', key: 'd9Code', width: 12 },
+    { header: 'D9 Model', key: 'd9Model', width: 20 },
+    { header: 'Size', key: 'size', width: 10 },
+    { header: 'Lot', key: 'lot', width: 8 },
+    { header: 'Qty', key: 'qty', width: 8 },
+    { header: 'MRP [Including GST]', key: 'mrpIncGst', width: 22 },
+    { header: 'Discount Received', key: 'discountReceived', width: 18 },
+    { header: 'GST%', key: 'purchaseGstPercent', width: 8 },
+    { header: 'Cost Price', key: 'costPrice', width: 14 },
+    { header: 'GST Amount', key: 'purchaseGstAmount', width: 14 },
+    { header: 'Total Cost Price', key: 'totalCostPrice', width: 16 },
+    { header: 'Amount', key: 'amount', width: 14 },
+    { header: 'Remark', key: 'remark', width: 25 },
+    { header: 'RequestedBy', key: 'requestedBy', width: 15 },
+    { header: 'RequestedAt', key: 'requestedAt', width: 22 },
+    { header: 'Status', key: 'status', width: 12 }, // Pending | Approved | Rejected
+    { header: 'ReviewedBy', key: 'reviewedBy', width: 15 },
+    { header: 'ReviewedAt', key: 'reviewedAt', width: 22 },
+    { header: 'ReviewNote', key: 'reviewNote', width: 30 },
   ],
   AuditLog: [
     { header: 'LogID', key: 'logId', width: 20 },
@@ -384,6 +410,7 @@ async function parseUploadedExcel(filePath) {
 const HEADER_ALIASES = {
   srNo: ['sr no', 'sr.no', 'sr. no', 'sno', 's.no', 'serial', 'serial no', '#'],
   shoeType: ['shoe type', 'shoetype', 'type', 'category', 'shoe category'],
+  d9Code: ['d9 code', 'd9code', 'model code', 'modelcode', 'sku', 'code'],
   d9Model: ['d9 model', 'd9model', 'model', 'model name', 'product', 'product name'],
   size: ['size', 'shoe size'],
   lot: ['lot', 'lot no', 'batch', 'lot number'],

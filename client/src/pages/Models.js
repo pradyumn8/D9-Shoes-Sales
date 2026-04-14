@@ -7,7 +7,7 @@ export default function Models() {
   const [models, setModels] = useState([]);
   const [shoeTypes, setShoeTypes] = useState([]);
   const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState({ modelName: '', shoeType: '' });
+  const [form, setForm] = useState({ modelCode: '', modelName: '', shoeType: '' });
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(new Set());
 
@@ -25,7 +25,7 @@ export default function Models() {
     try {
       await api.post('/models', form);
       setShowModal(false);
-      setForm({ modelName: '', shoeType: '' });
+      setForm({ modelCode: '', modelName: '', shoeType: '' });
       load();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed');
@@ -79,7 +79,7 @@ export default function Models() {
       </div>
 
       <div className="toolbar">
-        <button className="btn btn-primary" onClick={() => { setForm({ modelName: '', shoeType: shoeTypes[0]?.typeName || '' }); setShowModal(true); }}>
+        <button className="btn btn-primary" onClick={() => { setForm({ modelCode: '', modelName: '', shoeType: shoeTypes[0]?.typeName || '' }); setShowModal(true); }}>
           + Add Model
         </button>
         {isAdmin && selected.size > 0 && (
@@ -101,6 +101,7 @@ export default function Models() {
                       onChange={toggleSelectAll} title="Select all" />
                   </th>
                 )}
+                <th>Code</th>
                 <th>Model Name</th>
                 <th>Shoe Type</th>
                 <th>Created</th>
@@ -115,6 +116,7 @@ export default function Models() {
                       <input type="checkbox" checked={selected.has(m.modelId)} onChange={() => toggleSelect(m.modelId)} />
                     </td>
                   )}
+                  <td><code style={{ background: '#f1f3f4', padding: '2px 6px', borderRadius: 4, fontSize: 13 }}>{m.modelCode || '-'}</code></td>
                   <td><strong>{m.modelName}</strong></td>
                   <td><span className="badge badge-blue">{m.shoeType}</span></td>
                   <td>{m.createdAt ? new Date(m.createdAt).toLocaleDateString() : '-'}</td>
@@ -126,7 +128,7 @@ export default function Models() {
                 </tr>
               ))}
               {models.length === 0 && (
-                <tr><td colSpan={isAdmin ? 5 : 3} style={{ textAlign: 'center', color: '#999', padding: 40 }}>No models. Add one or upload an Excel file to auto-create.</td></tr>
+                <tr><td colSpan={isAdmin ? 6 : 4} style={{ textAlign: 'center', color: '#999', padding: 40 }}>No models. Add one or upload an Excel file to auto-create.</td></tr>
               )}
             </tbody>
           </table>
@@ -139,6 +141,12 @@ export default function Models() {
             <h2>Add D9 Model</h2>
             {error && <div className="alert alert-danger">{error}</div>}
             <form onSubmit={handleSubmit}>
+              <div className="form-group">
+                <label>Model Code</label>
+                <input value={form.modelCode} onChange={e => setForm({ ...form, modelCode: e.target.value })}
+                  placeholder="Leave blank to auto-generate (e.g. D9-001)" />
+                <small style={{ color: '#666', fontSize: 12 }}>Unique short code for labels/barcodes. Auto-generated if blank.</small>
+              </div>
               <div className="form-group">
                 <label>Model Name *</label>
                 <input value={form.modelName} onChange={e => setForm({ ...form, modelName: e.target.value })}

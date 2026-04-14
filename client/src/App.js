@@ -14,6 +14,7 @@ import ShoeTypes from './pages/ShoeTypes';
 import Models from './pages/Models';
 import AuditLog from './pages/AuditLog';
 import Users from './pages/Users';
+import StockRequests from './pages/StockRequests';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -42,9 +43,10 @@ function AppRoutes() {
       <Route path="/add-stock" element={<PrivateRoute><Layout><AddStock /></Layout></PrivateRoute>} />
       <Route path="/sell" element={<PrivateRoute><Layout><SellStock /></Layout></PrivateRoute>} />
       <Route path="/stock" element={<PrivateRoute><Layout><StockSummary /></Layout></PrivateRoute>} />
-      <Route path="/upload" element={<PrivateRoute><Layout><ExcelUpload /></Layout></PrivateRoute>} />
+      <Route path="/upload" element={<AdminRoute><Layout><ExcelUpload /></Layout></AdminRoute>} />
       <Route path="/shoe-types" element={<PrivateRoute><Layout><ShoeTypes /></Layout></PrivateRoute>} />
       <Route path="/models" element={<PrivateRoute><Layout><Models /></Layout></PrivateRoute>} />
+      <Route path="/stock-requests" element={<PrivateRoute><Layout><StockRequests /></Layout></PrivateRoute>} />
       <Route path="/audit" element={<AdminRoute><Layout><AuditLog /></Layout></AdminRoute>} />
       <Route path="/users" element={<AdminRoute><Layout><Users /></Layout></AdminRoute>} />
     </Routes>

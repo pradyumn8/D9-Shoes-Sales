@@ -6,8 +6,16 @@ const {
 } = require('../services/excelService');
 const { authMiddleware, adminOnly } = require('../middleware/auth');
 const { logAction } = require('./audit');
+const { generateNextCode } = require('./models');
 
 const router = express.Router();
+
+// Find the modelCode for a given model name from the Models sheet (case-insensitive).
+function findModelCode(models, modelName) {
+  const target = String(modelName || '').trim().toLowerCase();
+  const match = models.find(m => String(m.modelName || '').trim().toLowerCase() === target);
+  return match ? String(match.modelCode || '').trim() : '';
+}
 
 // GET /api/inventory - All inventory entries
 router.get('/', authMiddleware, async (req, res) => {
@@ -159,17 +167,81 @@ router.post('/', authMiddleware, async (req, res) => {
       purchaseGstPercent, costPrice, purchaseGstAmount, totalCostPrice,
       amount, remark,
     } = req.body;
+    let { d9Code } = req.body;
 
     if (!shoeType || !d9Model || !size || !qty) {
       return res.status(400).json({ error: 'Shoe Type, D9 Model, Size, and Qty are required' });
     }
 
+    // Non-admin users create a pending stock request; admin needs to approve before
+    // it lands in the Inventory sheet.
+    if (req.user.role !== 'admin') {
+      const requestId = uuidv4();
+      const request = {
+        requestId,
+        shoeType: String(shoeType).trim(),
+        d9Code: d9Code ? String(d9Code).trim().toUpperCase() : '',
+        d9Model: String(d9Model).trim(),
+        size: String(size).trim(),
+        lot: lot || '1st',
+        qty: Number(qty),
+        mrpIncGst: cleanNumeric(mrpIncGst),
+        discountReceived: discountReceived || '',
+        purchaseGstPercent: cleanPercent(purchaseGstPercent),
+        costPrice: cleanNumeric(costPrice),
+        purchaseGstAmount: cleanNumeric(purchaseGstAmount),
+        totalCostPrice: cleanNumeric(totalCostPrice),
+        amount: cleanNumeric(amount),
+        remark: remark || '',
+        requestedBy: req.user.username,
+        requestedAt: new Date().toISOString(),
+        status: 'Pending',
+        reviewedBy: '',
+        reviewedAt: '',
+        reviewNote: '',
+      };
+      await appendRow('StockRequests', request);
+      await logAction('REQUEST_STOCK', 'StockRequest', requestId,
+        `Requested ${qty} x ${d9Model} (${size}) Lot:${lot || '1st'}`,
+        req.user.username);
+      return res.status(201).json({
+        message: 'Stock request submitted for admin approval.',
+        pending: true,
+        request,
+      });
+    }
+
     const srNo = await getNextSrNo();
     const entryId = uuidv4();
+
+    // Resolve d9Code: use provided value, else look up by model name from Models sheet
+    const modelsAtStart = await readSheet('Models');
+    const trimmedName = String(d9Model).trim();
+    if (!d9Code || String(d9Code).trim() === '') {
+      d9Code = findModelCode(modelsAtStart, trimmedName);
+    } else {
+      d9Code = String(d9Code).trim().toUpperCase();
+      // Enforce code uniqueness: reject if this code is already used by a different model.
+      const owner = modelsAtStart.find(m => String(m.modelCode || '').trim().toUpperCase() === d9Code);
+      if (owner && String(owner.modelName || '').trim().toLowerCase() !== trimmedName.toLowerCase()) {
+        return res.status(400).json({
+          error: `Code "${d9Code}" is already used by model "${owner.modelName}". Codes must be unique.`,
+        });
+      }
+      // If this model already exists with a different code, reject to avoid inconsistency.
+      const existingModelByName = modelsAtStart.find(m => String(m.modelName || '').trim().toLowerCase() === trimmedName.toLowerCase());
+      const existingCode = existingModelByName ? String(existingModelByName.modelCode || '').trim().toUpperCase() : '';
+      if (existingCode && existingCode !== d9Code) {
+        return res.status(400).json({
+          error: `Model "${trimmedName}" already has code "${existingCode}". Leave D9 Code blank to use it, or update the model first.`,
+        });
+      }
+    }
 
     const entry = {
       srNo,
       shoeType: String(shoeType).trim(),
+      d9Code,
       d9Model: String(d9Model).trim(),
       size: String(size).trim(),
       lot: lot || '1st',
@@ -210,9 +282,16 @@ router.post('/', authMiddleware, async (req, res) => {
     }
     const models = await readSheet('Models');
     if (!models.find(m => m.modelName?.toLowerCase() === d9Model.toLowerCase())) {
+      // Use the entry's d9Code if it was provided; otherwise auto-generate.
+      const newModelCode = d9Code && d9Code.trim() !== '' ? d9Code : generateNextCode(models);
       await appendRow('Models', {
-        modelId: uuidv4(), modelName: d9Model, shoeType, createdAt: new Date().toISOString(),
+        modelId: uuidv4(), modelCode: newModelCode, modelName: d9Model, shoeType, createdAt: new Date().toISOString(),
       });
+      // Backfill the inventory row's code if it was blank
+      if (!entry.d9Code || entry.d9Code.trim() === '') {
+        await updateRow('Inventory', 'entryId', entryId, { d9Code: newModelCode });
+        entry.d9Code = newModelCode;
+      }
     }
 
     await logAction('ADD_STOCK', 'Inventory', entryId, `Added ${qty} x ${d9Model} (${size}) Lot:${lot || '1st'}`, req.user.username);
@@ -227,7 +306,7 @@ router.put('/:entryId', authMiddleware, async (req, res) => {
   try {
     const updates = {};
     const allowed = [
-      'shoeType', 'd9Model', 'size', 'lot', 'qty', 'mrpIncGst', 'discountReceived',
+      'shoeType', 'd9Code', 'd9Model', 'size', 'lot', 'qty', 'mrpIncGst', 'discountReceived',
       'purchaseGstPercent', 'costPrice', 'purchaseGstAmount', 'totalCostPrice',
       'amount', 'billingAmount', 'saleGstPercent', 'salePrice', 'saleGstAmount',
       'totalBillingAmount', 'soldTo', 'paid', 'buyerName', 'billingName',
@@ -525,6 +604,169 @@ router.get('/recommendations', authMiddleware, async (req, res) => {
     });
 
     res.json(recommendations);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------- Stock Request Approval Workflow ----------
+
+// GET /api/inventory/requests - list stock requests (admin only; users see their own pending)
+router.get('/requests', authMiddleware, async (req, res) => {
+  try {
+    const all = await readSheet('StockRequests');
+    const isAdmin = req.user.role === 'admin';
+    const list = isAdmin ? all : all.filter(r => r.requestedBy === req.user.username);
+    // Sort newest first
+    list.sort((a, b) => new Date(b.requestedAt || 0) - new Date(a.requestedAt || 0));
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/inventory/requests/:requestId/approve - admin approves → promote to Inventory
+router.post('/requests/:requestId/approve', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { reviewNote } = req.body;
+    const requests = await readSheet('StockRequests');
+    const request = requests.find(r => r.requestId === requestId);
+    if (!request) return res.status(404).json({ error: 'Request not found' });
+    if (request.status !== 'Pending') {
+      return res.status(400).json({ error: `Request is already ${request.status}` });
+    }
+
+    // Resolve d9Code the same way admin Add Stock does
+    const modelsAtStart = await readSheet('Models');
+    const trimmedName = String(request.d9Model || '').trim();
+    let d9Code = request.d9Code ? String(request.d9Code).trim().toUpperCase() : '';
+    if (!d9Code) {
+      d9Code = findModelCode(modelsAtStart, trimmedName);
+    } else {
+      const owner = modelsAtStart.find(m => String(m.modelCode || '').trim().toUpperCase() === d9Code);
+      if (owner && String(owner.modelName || '').trim().toLowerCase() !== trimmedName.toLowerCase()) {
+        return res.status(400).json({
+          error: `Code "${d9Code}" is already used by model "${owner.modelName}". Edit the request or reject it.`,
+        });
+      }
+      const existingByName = modelsAtStart.find(m => String(m.modelName || '').trim().toLowerCase() === trimmedName.toLowerCase());
+      const existingCode = existingByName ? String(existingByName.modelCode || '').trim().toUpperCase() : '';
+      if (existingCode && existingCode !== d9Code) {
+        return res.status(400).json({
+          error: `Model "${trimmedName}" already has code "${existingCode}". Edit the request to match or clear the D9 Code.`,
+        });
+      }
+    }
+
+    const srNo = await getNextSrNo();
+    const entryId = uuidv4();
+    const entry = {
+      srNo,
+      shoeType: String(request.shoeType).trim(),
+      d9Code,
+      d9Model: trimmedName,
+      size: String(request.size).trim(),
+      lot: request.lot || '1st',
+      qty: Number(request.qty),
+      mrpIncGst: cleanNumeric(request.mrpIncGst),
+      discountReceived: request.discountReceived || '',
+      purchaseGstPercent: cleanPercent(request.purchaseGstPercent),
+      costPrice: cleanNumeric(request.costPrice),
+      purchaseGstAmount: cleanNumeric(request.purchaseGstAmount),
+      totalCostPrice: cleanNumeric(request.totalCostPrice),
+      amount: cleanNumeric(request.amount),
+      billingAmount: '', saleGstPercent: '', salePrice: '', saleGstAmount: '',
+      totalBillingAmount: '', soldTo: '', paid: '', buyerName: '', billingName: '',
+      invoicingDone: '', paymentStatus: '',
+      remark: request.remark || '',
+      entryId,
+      entryDate: new Date().toISOString(),
+      enteredBy: request.requestedBy,
+      status: 'In Stock',
+    };
+    await appendRow('Inventory', entry);
+
+    // Auto-create shoe type and model if missing
+    const types = await readSheet('ShoeTypes');
+    if (!types.find(t => t.typeName?.toLowerCase() === entry.shoeType.toLowerCase())) {
+      await appendRow('ShoeTypes', {
+        typeId: uuidv4(), typeName: entry.shoeType, description: '', createdAt: new Date().toISOString(),
+      });
+    }
+    if (!modelsAtStart.find(m => m.modelName?.toLowerCase() === trimmedName.toLowerCase())) {
+      const newCode = d9Code && d9Code.trim() !== '' ? d9Code : generateNextCode(modelsAtStart);
+      await appendRow('Models', {
+        modelId: uuidv4(), modelCode: newCode, modelName: trimmedName,
+        shoeType: entry.shoeType, createdAt: new Date().toISOString(),
+      });
+      if (!entry.d9Code || entry.d9Code === '') {
+        await updateRow('Inventory', 'entryId', entryId, { d9Code: newCode });
+        entry.d9Code = newCode;
+      }
+    }
+
+    await updateRow('StockRequests', 'requestId', requestId, {
+      status: 'Approved',
+      reviewedBy: req.user.username,
+      reviewedAt: new Date().toISOString(),
+      reviewNote: reviewNote || '',
+    });
+
+    await logAction('APPROVE_STOCK', 'StockRequest', requestId,
+      `Approved request from ${request.requestedBy}: ${request.qty} x ${request.d9Model} (${request.size})`,
+      req.user.username);
+    res.json({ message: 'Request approved and added to inventory', entry });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/inventory/requests/:requestId/reject - admin rejects
+router.post('/requests/:requestId/reject', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { reviewNote } = req.body;
+    const requests = await readSheet('StockRequests');
+    const request = requests.find(r => r.requestId === requestId);
+    if (!request) return res.status(404).json({ error: 'Request not found' });
+    if (request.status !== 'Pending') {
+      return res.status(400).json({ error: `Request is already ${request.status}` });
+    }
+    await updateRow('StockRequests', 'requestId', requestId, {
+      status: 'Rejected',
+      reviewedBy: req.user.username,
+      reviewedAt: new Date().toISOString(),
+      reviewNote: reviewNote || '',
+    });
+    await logAction('REJECT_STOCK', 'StockRequest', requestId,
+      `Rejected request from ${request.requestedBy}: ${request.qty} x ${request.d9Model} (${request.size})${reviewNote ? ' — ' + reviewNote : ''}`,
+      req.user.username);
+    res.json({ message: 'Request rejected' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/inventory/requests/:requestId - user can cancel their own pending request; admin can delete any
+router.delete('/requests/:requestId', authMiddleware, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const requests = await readSheet('StockRequests');
+    const request = requests.find(r => r.requestId === requestId);
+    if (!request) return res.status(404).json({ error: 'Request not found' });
+    const isAdmin = req.user.role === 'admin';
+    if (!isAdmin && request.requestedBy !== req.user.username) {
+      return res.status(403).json({ error: 'You can only cancel your own requests' });
+    }
+    if (!isAdmin && request.status !== 'Pending') {
+      return res.status(400).json({ error: 'Only pending requests can be cancelled' });
+    }
+    await deleteRow('StockRequests', 'requestId', requestId);
+    await logAction('DELETE_STOCK_REQUEST', 'StockRequest', requestId,
+      `Deleted request from ${request.requestedBy}`,
+      req.user.username);
+    res.json({ message: 'Request removed' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -6,6 +6,20 @@ const { logAction } = require('./audit');
 
 const router = express.Router();
 
+// Generate next D9-NNN code based on existing models. Skips any non-conforming codes.
+function generateNextCode(existingModels) {
+  let maxNum = 0;
+  for (const m of existingModels) {
+    const code = String(m.modelCode || '').trim().toUpperCase();
+    const match = code.match(/^D9-(\d+)$/);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (n > maxNum) maxNum = n;
+    }
+  }
+  return `D9-${String(maxNum + 1).padStart(3, '0')}`;
+}
+
 // GET /api/models
 router.get('/', authMiddleware, async (req, res) => {
   try {
@@ -20,6 +34,7 @@ router.get('/', authMiddleware, async (req, res) => {
 router.post('/', authMiddleware, async (req, res) => {
   try {
     const { modelName, shoeType } = req.body;
+    let { modelCode } = req.body;
     if (!modelName || !shoeType) {
       return res.status(400).json({ error: 'Model name and shoe type are required' });
     }
@@ -29,15 +44,26 @@ router.post('/', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Model already exists' });
     }
 
+    // Auto-generate code if not provided; otherwise normalize and validate uniqueness
+    if (!modelCode || String(modelCode).trim() === '') {
+      modelCode = generateNextCode(models);
+    } else {
+      modelCode = String(modelCode).trim().toUpperCase();
+      if (models.find(m => String(m.modelCode || '').toUpperCase() === modelCode)) {
+        return res.status(400).json({ error: `Model code "${modelCode}" is already in use` });
+      }
+    }
+
     const model = {
       modelId: uuidv4(),
+      modelCode,
       modelName,
       shoeType,
       createdAt: new Date().toISOString(),
     };
 
     await appendRow('Models', model);
-    await logAction('CREATE', 'Model', model.modelId, `Created model: ${modelName} (${shoeType})`, req.user.username);
+    await logAction('CREATE', 'Model', model.modelId, `Created model: ${modelCode} - ${modelName} (${shoeType})`, req.user.username);
     res.status(201).json(model);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -104,3 +130,4 @@ router.post('/bulk-delete', authMiddleware, adminOnly, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.generateNextCode = generateNextCode;

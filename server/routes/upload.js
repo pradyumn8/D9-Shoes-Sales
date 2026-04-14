@@ -7,8 +7,9 @@ const {
   parseUploadedExcel, mapUploadedRow, validateInventoryRow,
   cleanNumeric, cleanPercent, DB_FILE,
 } = require('../services/excelService');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, adminOnly } = require('../middleware/auth');
 const { logAction } = require('./audit');
+const { generateNextCode } = require('./models');
 
 const router = express.Router();
 
@@ -35,7 +36,7 @@ const upload = multer({
 // POST /api/upload/bulk - Bulk upload inventory from Excel
 // mode: "append" (default) = add new entries, skip duplicates
 // mode: "update" = update existing entries by Sr No, add new ones
-router.post('/bulk', authMiddleware, upload.single('file'), async (req, res) => {
+router.post('/bulk', authMiddleware, adminOnly, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
@@ -68,11 +69,35 @@ router.post('/bulk', authMiddleware, upload.single('file'), async (req, res) => 
     const results = { success: 0, updated: 0, errors: [], duplicates: 0, total: rows.length, mode };
     const entriesToInsert = [];
     const newShoeTypes = new Set();
-    const newModels = new Set();
+    // Track new models by lowercase name → { name, type, code } so the same model
+    // isn't queued twice in a single upload (keyed by name, first code wins).
+    const newModelsByName = {};
 
     const existingInventory = await readSheet('Inventory');
     const existingTypes = await readSheet('ShoeTypes');
     const existingModels = await readSheet('Models');
+
+    // Code ownership map (uppercase code -> model name) and the reverse
+    // (lowercase model name -> uppercase code) to enforce uniqueness across
+    // existing models AND any models claimed earlier in this upload batch.
+    const codeClaimedBy = {};
+    const nameClaimedCode = {};
+    for (const m of existingModels) {
+      const code = String(m.modelCode || '').trim().toUpperCase();
+      const name = String(m.modelName || '').trim();
+      if (code) codeClaimedBy[code] = name;
+      if (name) nameClaimedCode[name.toLowerCase()] = code;
+    }
+    // Returns the next D9-NNN code not yet claimed (existing or in-upload).
+    const nextAvailableCode = () => {
+      let max = 0;
+      for (const code of Object.keys(codeClaimedBy)) {
+        const m = code.match(/^D9-(\d+)$/);
+        if (m) max = Math.max(max, parseInt(m[1], 10));
+      }
+      return `D9-${String(max + 1).padStart(3, '0')}`;
+    };
+    results.warnings = [];
 
     for (let i = 0; i < rows.length; i++) {
       const raw = rows[i];
@@ -92,6 +117,7 @@ router.post('/bulk', authMiddleware, upload.single('file'), async (req, res) => 
         if (existingEntry) {
           const updates = {};
           if (mapped.shoeType) updates.shoeType = String(mapped.shoeType).trim();
+          if (mapped.d9Code) updates.d9Code = String(mapped.d9Code).trim().toUpperCase();
           if (mapped.d9Model) updates.d9Model = String(mapped.d9Model).trim();
           if (mapped.size) updates.size = String(mapped.size).trim();
           if (mapped.lot) updates.lot = String(mapped.lot).trim();
@@ -148,12 +174,60 @@ router.post('/bulk', authMiddleware, upload.single('file'), async (req, res) => 
         }
       }
 
-      // New entry
+      // Resolve d9Code:
+      //   - If this model name already has a code (existing or in-upload), ALWAYS use it.
+      //   - Else if uploaded code is unique → use it.
+      //   - Else if uploaded code conflicts with another model → auto-reassign next D9-NNN.
+      //   - Else (no uploaded code, new model) → auto-generate next D9-NNN.
+      const trimmedModelName = String(mapped.d9Model).trim();
+      const uploaded = mapped.d9Code ? String(mapped.d9Code).trim().toUpperCase() : '';
+      let resolvedCode = '';
+      const existingCodeForName = nameClaimedCode[trimmedModelName.toLowerCase()] || '';
+
+      if (existingCodeForName) {
+        resolvedCode = existingCodeForName;
+        if (uploaded && uploaded !== existingCodeForName) {
+          results.warnings.push({
+            row: excelRow,
+            field: 'D9 Code',
+            message: `Model "${trimmedModelName}" already has code "${existingCodeForName}"; uploaded "${uploaded}" ignored.`,
+          });
+        }
+      } else if (uploaded) {
+        const owner = codeClaimedBy[uploaded];
+        if (owner && owner.toLowerCase() !== trimmedModelName.toLowerCase()) {
+          // Conflict — auto-reassign to next D9-NNN
+          const newCode = nextAvailableCode();
+          resolvedCode = newCode;
+          codeClaimedBy[newCode] = trimmedModelName;
+          nameClaimedCode[trimmedModelName.toLowerCase()] = newCode;
+          results.warnings.push({
+            row: excelRow,
+            field: 'D9 Code',
+            message: `Code "${uploaded}" is already used by "${owner}"; new model "${trimmedModelName}" assigned "${newCode}".`,
+          });
+        } else {
+          // Uploaded code is unique; claim it for this (new) model
+          resolvedCode = uploaded;
+          codeClaimedBy[uploaded] = trimmedModelName;
+          nameClaimedCode[trimmedModelName.toLowerCase()] = uploaded;
+        }
+      } else if (trimmedModelName) {
+        // No uploaded code and model is new → auto-generate
+        const newCode = nextAvailableCode();
+        resolvedCode = newCode;
+        codeClaimedBy[newCode] = trimmedModelName;
+        nameClaimedCode[trimmedModelName.toLowerCase()] = newCode;
+      }
+
+      // New entry — in append mode, always auto-assign Sr No (ignore uploaded Sr No).
+      // In update mode, a fall-through here means the uploaded Sr No wasn't found; keep it if present.
       const entryId = uuidv4();
       const entry = {
-        srNo: mapped.srNo || nextSrNo++,
+        srNo: mode === 'append' ? nextSrNo++ : (mapped.srNo || nextSrNo++),
         shoeType: String(mapped.shoeType).trim(),
-        d9Model: String(mapped.d9Model).trim(),
+        d9Code: resolvedCode,
+        d9Model: trimmedModelName,
         size: String(mapped.size).trim(),
         lot: String(mapped.lot || '1st').trim(),
         qty: Number(mapped.qty),
@@ -191,7 +265,12 @@ router.post('/bulk', authMiddleware, upload.single('file'), async (req, res) => 
       }
       const mdLower = entry.d9Model.toLowerCase();
       if (!existingModels.find(m => m.modelName?.toLowerCase() === mdLower)) {
-        newModels.add(JSON.stringify({ name: entry.d9Model, type: entry.shoeType }));
+        // Register once per name; first code wins (later same-name rows reuse it).
+        if (!newModelsByName[mdLower]) {
+          newModelsByName[mdLower] = { name: entry.d9Model, type: entry.shoeType, code: entry.d9Code };
+        } else if (!newModelsByName[mdLower].code && entry.d9Code) {
+          newModelsByName[mdLower].code = entry.d9Code;
+        }
       }
 
       results.success++;
@@ -209,12 +288,31 @@ router.post('/bulk', authMiddleware, upload.single('file'), async (req, res) => 
       });
     }
 
-    // Auto-create new models
-    for (const modelJson of newModels) {
-      const { name, type } = JSON.parse(modelJson);
-      await appendRow('Models', {
-        modelId: uuidv4(), modelName: name, shoeType: type, createdAt: new Date().toISOString(),
-      });
+    // Auto-create new models — use uploaded code when present, else auto-generate.
+    // Track resolved (name -> code) so we can backfill any inventory rows that
+    // had a blank d9Code because their model didn't exist yet at insert time.
+    const modelsForCodeGen = [...existingModels];
+    const newModelCodes = {}; // lowercased model name -> code
+    for (const { name, type, code: uploadedCode } of Object.values(newModelsByName)) {
+      const code = uploadedCode && uploadedCode.trim() !== ''
+        ? uploadedCode.trim().toUpperCase()
+        : generateNextCode(modelsForCodeGen);
+      const newModel = {
+        modelId: uuidv4(), modelCode: code, modelName: name, shoeType: type, createdAt: new Date().toISOString(),
+      };
+      await appendRow('Models', newModel);
+      modelsForCodeGen.push(newModel); // include so next iteration generates a fresh code
+      newModelCodes[name.toLowerCase()] = code;
+    }
+
+    // Backfill inventory rows just inserted whose d9Code was blank (model was new)
+    for (const inserted of entriesToInsert) {
+      if ((!inserted.d9Code || inserted.d9Code === '') && inserted.d9Model) {
+        const code = newModelCodes[inserted.d9Model.toLowerCase()];
+        if (code) {
+          await updateRow('Inventory', 'entryId', inserted.entryId, { d9Code: code });
+        }
+      }
     }
 
     await logAction('BULK_UPLOAD', 'Inventory', '',
@@ -227,7 +325,7 @@ router.post('/bulk', authMiddleware, upload.single('file'), async (req, res) => 
         (results.updated > 0 ? `, ${results.updated} entries updated` : ''),
       ...results,
       newShoeTypes: [...newShoeTypes],
-      newModels: [...newModels].map(m => JSON.parse(m).name),
+      newModels: Object.values(newModelsByName).map(m => m.name),
       detectedHeaders: headers,
       headerRowFound: headerRowNum,
     });
@@ -237,16 +335,71 @@ router.post('/bulk', authMiddleware, upload.single('file'), async (req, res) => 
 });
 
 // POST /api/upload/preview - Preview uploaded Excel data before importing
-router.post('/preview', authMiddleware, upload.single('file'), async (req, res) => {
+router.post('/preview', authMiddleware, adminOnly, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
     const { rows, headers, headerRowNum } = await parseUploadedExcel(req.file.path);
 
+    // Resolve D9 Code the same way the bulk import will, so preview shows the real value.
+    const existingModels = await readSheet('Models');
+    const codeClaimedBy = {};
+    const nameClaimedCode = {};
+    for (const m of existingModels) {
+      const code = String(m.modelCode || '').trim().toUpperCase();
+      const name = String(m.modelName || '').trim();
+      if (code) codeClaimedBy[code] = name;
+      if (name) nameClaimedCode[name.toLowerCase()] = code;
+    }
+    const nextAvailableCode = () => {
+      let max = 0;
+      for (const code of Object.keys(codeClaimedBy)) {
+        const m = code.match(/^D9-(\d+)$/);
+        if (m) max = Math.max(max, parseInt(m[1], 10));
+      }
+      return `D9-${String(max + 1).padStart(3, '0')}`;
+    };
+
     const previews = rows.slice(0, 20).map((raw, i) => {
       const mapped = mapUploadedRow(raw);
       const errors = validateInventoryRow(mapped, mapped._excelRow || (i + 2));
-      return { ...mapped, _errors: errors };
+
+      const name = String(mapped.d9Model || '').trim();
+      const uploaded = String(mapped.d9Code || '').trim().toUpperCase();
+      let resolvedCode = '';
+      let codeSource = ''; // 'existing' | 'uploaded' | 'auto' | 'reassigned'
+      let codeNote = '';
+      const existingCodeForName = nameClaimedCode[name.toLowerCase()];
+
+      if (existingCodeForName) {
+        resolvedCode = existingCodeForName;
+        codeSource = 'existing';
+        if (uploaded && uploaded !== existingCodeForName) {
+          codeNote = `uploaded "${uploaded}" ignored (model already has this code)`;
+        }
+      } else if (uploaded) {
+        const owner = codeClaimedBy[uploaded];
+        if (owner && owner.toLowerCase() !== name.toLowerCase()) {
+          // Conflict — auto-reassign next D9-NNN
+          resolvedCode = nextAvailableCode();
+          codeSource = 'reassigned';
+          codeNote = `"${uploaded}" is used by "${owner}"; reassigned to "${resolvedCode}"`;
+          codeClaimedBy[resolvedCode] = name;
+          if (name) nameClaimedCode[name.toLowerCase()] = resolvedCode;
+        } else {
+          resolvedCode = uploaded;
+          codeSource = 'uploaded';
+          codeClaimedBy[uploaded] = name;
+          if (name) nameClaimedCode[name.toLowerCase()] = uploaded;
+        }
+      } else if (name) {
+        resolvedCode = nextAvailableCode();
+        codeSource = 'auto';
+        codeClaimedBy[resolvedCode] = name;
+        nameClaimedCode[name.toLowerCase()] = resolvedCode;
+      }
+
+      return { ...mapped, d9Code: resolvedCode, _codeSource: codeSource, _codeNote: codeNote, _errors: errors };
     });
 
     res.json({
@@ -273,7 +426,7 @@ router.get('/template', authMiddleware, async (req, res) => {
   const sheet = workbook.addWorksheet('Inventory');
 
   const templateCols = [
-    'Sr No', 'Shoe Type', 'D9 Model', 'Size', 'Lot', 'Qty',
+    'Sr No', 'Shoe Type', 'D9 Code', 'D9 Model', 'Size', 'Lot', 'Qty',
     'MRP [Including GST]', 'Discount Received', 'GST%', 'Cost Price',
     'GST Amount', 'Total Cost Price', 'Amount', 'Billing Amount',
     'GST%', 'Sale Price', 'GST Amount', 'Total Billing Amount',
@@ -288,7 +441,7 @@ router.get('/template', authMiddleware, async (req, res) => {
   templateCols.forEach((_, i) => { sheet.getColumn(i + 1).width = 18; });
 
   // Add sample row
-  sheet.addRow([1, 'Rubber Studs Shoes', 'Performer 2', 'UK 4', '1st', 1, 2207, '50%', '5%', 1050.95, 52, 1102.95, 1102.95, '', '', '', '', '', '', '', '', '', '', '', '']);
+  sheet.addRow([1, 'Rubber Studs Shoes', 'D9-001', 'Performer 2', 'UK 4', '1st', 1, 2207, '50%', '5%', 1050.95, 52, 1102.95, 1102.95, '', '', '', '', '', '', '', '', '', '', '', '']);
 
   const tempPath = path.join(__dirname, '..', 'uploads', `template-${Date.now()}.xlsx`);
   await workbook.xlsx.writeFile(tempPath);

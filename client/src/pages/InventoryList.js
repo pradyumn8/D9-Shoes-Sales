@@ -19,6 +19,16 @@ export default function InventoryList() {
 
   useEffect(() => { load(); }, []);
 
+  // Aggregate unsold qty per (d9Model + size) for low-stock detection (threshold: <= 3)
+  const LOW_STOCK_THRESHOLD = 3;
+  const stockByModelSize = inventory.reduce((acc, i) => {
+    const isInStock = !i.soldTo || String(i.soldTo).trim() === '';
+    if (!isInStock) return acc;
+    const key = `${i.d9Model}||${i.size}`;
+    acc[key] = (acc[key] || 0) + (Number(i.qty) || 0);
+    return acc;
+  }, {});
+
   const filtered = inventory.filter(i => {
     const matchesSearch =
       i.shoeType?.toLowerCase().includes(filter.toLowerCase()) ||
@@ -27,10 +37,15 @@ export default function InventoryList() {
       i.buyerName?.toLowerCase().includes(filter.toLowerCase()) ||
       i.soldTo?.toLowerCase().includes(filter.toLowerCase());
 
+    const isInStock = !i.soldTo || String(i.soldTo).trim() === '';
+    const totalInStock = stockByModelSize[`${i.d9Model}||${i.size}`] || 0;
+    const isLowStock = isInStock && totalInStock > 0 && totalInStock <= LOW_STOCK_THRESHOLD;
+
     const matchesStatus =
       statusFilter === 'all' ||
-      (statusFilter === 'instock' && (!i.soldTo || String(i.soldTo).trim() === '')) ||
-      (statusFilter === 'sold' && i.soldTo && String(i.soldTo).trim() !== '');
+      (statusFilter === 'instock' && isInStock) ||
+      (statusFilter === 'sold' && !isInStock) ||
+      (statusFilter === 'lowstock' && isLowStock);
 
     return matchesSearch && matchesStatus;
   });
@@ -68,6 +83,27 @@ export default function InventoryList() {
   const handleEdit = (entry) => {
     setEditing(entry.entryId);
     setEditForm({ ...entry });
+  };
+
+  // Recompute cost / GST amount / total cost / amount from MRP, discount, GST%, qty.
+  // Mirrors the formula in AddStock.js so editing MRP keeps derived values consistent.
+  const updateFormWithRecalc = (changes) => {
+    setEditForm(prev => {
+      const next = { ...prev, ...changes };
+      const mrp = Number(next.mrpIncGst) || 0;
+      const discount = Number(String(next.discountReceived || '').replace('%', '')) || 0;
+      const gstPercent = Number(String(next.purchaseGstPercent || '').replace('%', '')) || 0;
+      const qty = Number(next.qty) || 1;
+      if (mrp > 0) {
+        const discountedPrice = mrp * (1 - discount / 100);
+        const basePrice = discountedPrice / (1 + gstPercent / 100);
+        next.costPrice = Math.round(basePrice * 100) / 100;
+        next.purchaseGstAmount = Math.round((discountedPrice - basePrice) * 100) / 100;
+        next.totalCostPrice = Math.round(discountedPrice * 100) / 100;
+        next.amount = Math.round(discountedPrice * qty * 100) / 100;
+      }
+      return next;
+    });
   };
 
   const handleSave = async () => {
@@ -130,6 +166,7 @@ export default function InventoryList() {
           <option value="all">All Status</option>
           <option value="instock">In Stock</option>
           <option value="sold">Sold</option>
+          <option value="lowstock">{`Low Stock (\u2264 ${LOW_STOCK_THRESHOLD})`}</option>
         </select>
         <span style={{ color: '#666', fontSize: 13 }}>{filtered.length} entries</span>
 
@@ -161,6 +198,7 @@ export default function InventoryList() {
                 )}
                 <th>Sr</th>
                 <th>Shoe Type</th>
+                <th>Code</th>
                 <th>D9 Model</th>
                 <th>Size</th>
                 <th>Lot</th>
@@ -196,6 +234,7 @@ export default function InventoryList() {
                   )}
                   <td>{entry.srNo}</td>
                   <td>{entry.shoeType}</td>
+                  <td><code style={{ background: '#f1f3f4', padding: '2px 6px', borderRadius: 4, fontSize: 12 }}>{entry.d9Code || '-'}</code></td>
                   <td><strong>{entry.d9Model}</strong></td>
                   <td>{entry.size}</td>
                   <td><span className="badge badge-blue">{entry.lot}</span></td>
@@ -233,7 +272,7 @@ export default function InventoryList() {
                 </tr>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan={isAdmin ? 20 : 19} style={{ textAlign: 'center', color: '#999', padding: 40 }}>No entries found</td></tr>
+                <tr><td colSpan={isAdmin ? 21 : 20} style={{ textAlign: 'center', color: '#999', padding: 40 }}>No entries found</td></tr>
               )}
             </tbody>
           </table>
@@ -248,6 +287,10 @@ export default function InventoryList() {
               <div className="form-group">
                 <label>Shoe Type</label>
                 <input value={editForm.shoeType || ''} onChange={e => setEditForm({ ...editForm, shoeType: e.target.value })} />
+              </div>
+              <div className="form-group">
+                <label>D9 Code</label>
+                <input value={editForm.d9Code || ''} onChange={e => setEditForm({ ...editForm, d9Code: e.target.value })} placeholder="e.g. D9-001" />
               </div>
               <div className="form-group">
                 <label>D9 Model</label>
@@ -265,25 +308,31 @@ export default function InventoryList() {
               </div>
               <div className="form-group">
                 <label>Qty</label>
-                <input type="number" value={editForm.qty || ''} onChange={e => setEditForm({ ...editForm, qty: e.target.value })} />
+                <input type="number" value={editForm.qty || ''} onChange={e => updateFormWithRecalc({ qty: e.target.value })} />
               </div>
               <div className="form-group">
                 <label>MRP (Inc GST)</label>
-                <input value={editForm.mrpIncGst || ''} onChange={e => setEditForm({ ...editForm, mrpIncGst: e.target.value })} />
+                <input type="number" step="0.01" value={editForm.mrpIncGst || ''} onChange={e => updateFormWithRecalc({ mrpIncGst: e.target.value })} />
               </div>
             </div>
             <div className="form-row">
               <div className="form-group">
                 <label>Discount Received</label>
-                <input value={editForm.discountReceived || ''} onChange={e => setEditForm({ ...editForm, discountReceived: e.target.value })} />
+                <input value={editForm.discountReceived || ''} onChange={e => updateFormWithRecalc({ discountReceived: e.target.value })} placeholder="e.g. 50%" />
               </div>
               <div className="form-group">
                 <label>GST%</label>
-                <input value={editForm.purchaseGstPercent || ''} onChange={e => setEditForm({ ...editForm, purchaseGstPercent: e.target.value })} />
+                <select value={editForm.purchaseGstPercent || ''} onChange={e => updateFormWithRecalc({ purchaseGstPercent: e.target.value })}>
+                  <option value="">Select</option>
+                  <option value="5%">5%</option>
+                  <option value="12%">12%</option>
+                  <option value="18%">18%</option>
+                  <option value="28%">28%</option>
+                </select>
               </div>
               <div className="form-group">
-                <label>Cost Price</label>
-                <input value={editForm.costPrice || ''} onChange={e => setEditForm({ ...editForm, costPrice: e.target.value })} />
+                <label>Cost Price <span style={{ fontSize: 11, color: '#888', fontWeight: 400 }}>(auto)</span></label>
+                <input type="number" step="0.01" value={editForm.costPrice || ''} onChange={e => setEditForm({ ...editForm, costPrice: e.target.value })} />
               </div>
             </div>
             <div className="form-row">

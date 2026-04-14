@@ -114,6 +114,16 @@ export default function ExcelUpload() {
               {result.headerRowFound && <>Header row detected at: Row <strong>{result.headerRowFound}</strong><br /></>}
               {result.newShoeTypes?.length > 0 && <>New shoe types: {result.newShoeTypes.join(', ')}<br /></>}
               {result.newModels?.length > 0 && <>New models: {result.newModels.join(', ')}<br /></>}
+              {result.warnings?.length > 0 && (
+                <div style={{ marginTop: 12, maxHeight: 180, overflow: 'auto', background: '#fff4e5', padding: 10, borderRadius: 6 }}>
+                  <strong style={{ color: '#b45309' }}>Notices ({result.warnings.length}):</strong>
+                  <ul style={{ fontSize: 12, marginTop: 6, paddingLeft: 18 }}>
+                    {result.warnings.map((w, i) => (
+                      <li key={i}><strong>Row {w.row}:</strong> {w.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {result.errors?.length > 0 && (
                 <div style={{ marginTop: 12, maxHeight: 250, overflow: 'auto' }}>
                   <strong>Errors / Warnings ({result.errors.length}):</strong>
@@ -221,6 +231,8 @@ export default function ExcelUpload() {
             <h4 style={{ marginBottom: 8 }}>Append Mode (Default)</h4>
             <ul style={{ paddingLeft: 20, fontSize: 13, lineHeight: 2 }}>
               <li>Adds all rows as <strong>new entries</strong></li>
+              <li><strong>Sr No is auto-assigned</strong> — any Sr No in the uploaded sheet is ignored</li>
+              <li><strong>D9 Code must be unique</strong> — rows using a code already assigned to a different model are rejected</li>
               <li>Skips rows that look like duplicates (same Model + Size + Lot + Qty + MRP)</li>
               <li>Auto-creates new Shoe Types and Models</li>
               <li>Best for: <strong>Importing new stock</strong></li>
@@ -239,7 +251,7 @@ export default function ExcelUpload() {
           <h4 style={{ marginBottom: 8 }}>Supported Column Names</h4>
           <div style={{ fontSize: 12, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
             {[
-              'Sr No', 'Shoe Type', 'D9 Model', 'Size', 'Lot', 'Qty',
+              'Sr No', 'Shoe Type', 'D9 Code', 'D9 Model', 'Size', 'Lot', 'Qty',
               'MRP [Including GST]', 'Discount Received', 'GST%', 'Cost Price',
               'GST Amount', 'Total Cost Price', 'Amount', 'Billing Amount',
               'Sale Price', 'Total Billing Amount',
@@ -292,6 +304,7 @@ export default function ExcelUpload() {
                 <tr>
                   <th>Row</th>
                   <th>Shoe Type</th>
+                  <th>Code</th>
                   <th>D9 Model</th>
                   <th>Size</th>
                   <th>Lot</th>
@@ -312,6 +325,21 @@ export default function ExcelUpload() {
                     <tr key={idx} style={{ background: hasErrors ? '#fff5f5' : 'inherit' }}>
                       <td>{row._excelRow || (idx + 2)}</td>
                       <td>{row.shoeType || <span style={{ color: 'red' }}>MISSING</span>}</td>
+                      <td>
+                        {row.d9Code ? (
+                          <div title={row._codeNote || undefined}>
+                            <code style={{
+                              background: row._codeSource === 'reassigned' ? '#fff4e5' : '#f1f3f4',
+                              color: row._codeSource === 'reassigned' ? '#b45309' : 'inherit',
+                              padding: '2px 6px', borderRadius: 4, fontSize: 12,
+                            }}>{row.d9Code}</code>
+                            {row._codeSource === 'existing' && <div style={{ fontSize: 10, color: '#888' }}>from model</div>}
+                            {row._codeSource === 'auto' && <div style={{ fontSize: 10, color: '#888' }}>auto-generated</div>}
+                            {row._codeSource === 'uploaded' && <div style={{ fontSize: 10, color: '#2ecc71' }}>from file</div>}
+                            {row._codeSource === 'reassigned' && <div style={{ fontSize: 10, color: '#b45309' }}>reassigned</div>}
+                          </div>
+                        ) : <span style={{ color: '#999' }}>-</span>}
+                      </td>
                       <td><strong>{row.d9Model || <span style={{ color: 'red' }}>MISSING</span>}</strong></td>
                       <td>{row.size || <span style={{ color: 'red' }}>MISSING</span>}</td>
                       <td>{row.lot || '1st'}</td>

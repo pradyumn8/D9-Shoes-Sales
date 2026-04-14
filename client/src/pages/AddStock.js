@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
+import { useAuth } from '../context/AuthContext';
 
 export default function AddStock() {
+  const { isAdmin } = useAuth();
   const [shoeTypes, setShoeTypes] = useState([]);
   const [models, setModels] = useState([]);
   const [form, setForm] = useState({
@@ -51,8 +53,12 @@ export default function AddStock() {
     setError('');
     setSuccess('');
     try {
-      await api.post('/inventory', form);
-      setSuccess(`Stock added: ${form.d9Model} Size ${form.size} x ${form.qty}`);
+      const res = await api.post('/inventory', form);
+      if (res.data?.pending) {
+        setSuccess(`Request submitted for admin approval: ${form.d9Model} Size ${form.size} x ${form.qty}. Track it under "My Requests".`);
+      } else {
+        setSuccess(`Stock added: ${form.d9Model} Size ${form.size} x ${form.qty}`);
+      }
       setForm({
         shoeType: form.shoeType, d9Model: '', size: '', lot: '1st', qty: 1,
         mrpIncGst: '', discountReceived: '', purchaseGstPercent: '5%',
@@ -67,7 +73,9 @@ export default function AddStock() {
     <div>
       <div className="page-header">
         <h1>Add Stock</h1>
-        <p>Add new inventory entries</p>
+        <p>{isAdmin
+          ? 'Add new inventory entries'
+          : 'Submit a stock request for admin approval — it will appear in inventory once approved.'}</p>
       </div>
 
       <div className="card">
@@ -173,7 +181,7 @@ export default function AddStock() {
           </div>
 
           <button type="submit" className="btn btn-success" style={{ width: '100%', padding: 12, fontSize: 16, marginTop: 8 }}>
-            Add to Inventory
+            {isAdmin ? 'Add to Inventory' : 'Submit for Approval'}
           </button>
         </form>
       </div>

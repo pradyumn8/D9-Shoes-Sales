@@ -8,6 +8,7 @@ export default function Layout({ children }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [alerts, setAlerts] = useState([]);
+  const [pendingRequestCount, setPendingRequestCount] = useState(0);
   const [showPanel, setShowPanel] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const panelRef = useRef(null);
@@ -26,6 +27,21 @@ export default function Layout({ children }) {
 
     return () => clearInterval(interval);
   }, []);
+
+  // Fetch pending stock request count (used for sidebar badge + visibility for users)
+  useEffect(() => {
+    const fetchRequests = () => {
+      api.get('/inventory/requests')
+        .then(res => {
+          const pending = res.data.filter(r => (r.status || 'Pending') === 'Pending').length;
+          setPendingRequestCount(pending);
+        })
+        .catch(() => {});
+    };
+    fetchRequests();
+    const interval = setInterval(fetchRequests, 60000);
+    return () => clearInterval(interval);
+  }, [location.pathname]);
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
@@ -62,14 +78,17 @@ export default function Layout({ children }) {
     { to: '/add-stock', label: 'Add Stock', icon: '\u{1F4E5}' },
     { to: '/sell', label: 'Sell / Export', icon: '\u{1F4E4}' },
     { to: '/stock', label: 'Stock Summary', icon: '\u{1F4E6}' },
-    { to: '/upload', label: 'Excel Upload', icon: '\u{1F4C4}' },
     { to: '/shoe-types', label: 'Shoe Types', icon: '\u{1F3F7}' },
     { to: '/models', label: 'D9 Models', icon: '\u{1F45F}' },
   ];
 
   if (isAdmin) {
+    navItems.push({ to: '/stock-requests', label: 'Stock Requests', icon: '\u{1F4E5}', badge: pendingRequestCount });
+    navItems.push({ to: '/upload', label: 'Excel Upload', icon: '\u{1F4C4}' });
     navItems.push({ to: '/audit', label: 'Audit Log', icon: '\u{1F4DD}' });
     navItems.push({ to: '/users', label: 'Users', icon: '\u{1F465}' });
+  } else {
+    navItems.push({ to: '/stock-requests', label: 'My Requests', icon: '\u{1F4DD}' });
   }
 
   return (
@@ -207,6 +226,14 @@ export default function Layout({ children }) {
                   borderRadius: 10, padding: '1px 7px', fontSize: 11, fontWeight: 700,
                 }}>
                   {fifoCount}
+                </span>
+              )}
+              {item.badge > 0 && (
+                <span style={{
+                  marginLeft: 'auto', background: '#f39c12', color: '#fff',
+                  borderRadius: 10, padding: '1px 7px', fontSize: 11, fontWeight: 700,
+                }}>
+                  {item.badge}
                 </span>
               )}
             </NavLink>
